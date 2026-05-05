@@ -25,7 +25,7 @@
 # 训练策略
 ## 阶段 1：通用基座大规模预训练
     定位：打底通用语言、百科、常识、基础文理知识
-    数据总量：60M Tokens
+    数据总量：120M Tokens
     数据集： 中文（60%）：https://huggingface.co/datasets/opencsg/Fineweb-Edu-Chinese-V2.1
             英文（40%）：https://huggingface.co/datasets/togethercomputer/RedPajama-Data-V2
     训练目标：标准自回归 LM + FIM 填空训练
@@ -37,9 +37,10 @@
 
 ## 阶段 2：分领域独立专家单独训练
     独立拆分 5 大领域（为了简化训练，这里采用3大领域），每个领域用专属数据单独微调训练：
-    数学推理专家（数据集：https://huggingface.co/datasets/openbmb/UltraData-Math）（8M Tokens）
-    代码生成专家（数据集：https://huggingface.co/datasets/bigcode/the-stack-v2）（8M Tokens）
-    科研学术专家（数据集：https://huggingface.co/datasets/ccdv/arxiv-summarization）（8M Tokens）
+    数据总量：48M tokens
+    数学推理专家（数据集：https://huggingface.co/datasets/openbmb/UltraData-Math）（16M Tokens）
+    代码生成专家（数据集：https://huggingface.co/datasets/bigcode/the-stack-v2）（16M Tokens）
+    科研学术专家（数据集：https://huggingface.co/datasets/ccdv/arxiv-summarization）（16M Tokens）
     数据：每个领域只用自己的垂直语料
     训练方式：固定 V4 主干，只精调对应领域专家分支
     目的：让每个专家在自己领域达到最优能力
@@ -49,15 +50,15 @@
     训练方式：知识蒸馏 + 路径权重学习
     效果：一个模型同时拥有所有专家的领域能力，且互相不干扰
 
-    数据集构成（总共10M）：
+    数据集构成（总共20M tokens）：
     数据类型	        Token 量级	        占比	        数据来源
-    通用数据	        5.5M	            55%	        阶段 1 的通用高质量子集
-    代码 + 数学数据	    3M	                30%	        阶段 2 数学 / 代码专家的垂直数据核心子集
-    科研数据	        1.5M	            15%	        阶段 2 科研专家的垂直数据核心子集
+    通用数据	         11M	            55%	            阶段 1 的通用高质量子集
+    代码 + 数学数据	     6M	                30%	            阶段 2 数学 / 代码专家的垂直数据核心子集
+    科研数据	         3M	                15%	            阶段 2 科研专家的垂直数据核心子集
 
 ## 阶段 4：超长上下文扩窗续训（简化版）
     上下文：从 4K → 8K
-    数据：使用阶段 1 的通用普通文本（3M tokens 数据量）
+    数据：使用阶段 1 的通用普通文本（10M tokens 数据量）
     训练：只续训1000步
 
 ## 阶段 5：对齐阶段（SFT + GRPO 强化学习）
