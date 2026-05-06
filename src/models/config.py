@@ -7,8 +7,6 @@ class ModelArgs:
     """
     模型参数数据类，定义所有模型结构和超参数。
 
-    默认使用 Tiny（方案A）参数配置，总参数量约 25M，
-    适合单 GPU（12GB 显存）训练和快速迭代。
     可通过 ModelArgs.original() 获取完整 DeepSeek V4 配置。
     """
 
@@ -130,7 +128,7 @@ class ModelArgs:
     # ── 便捷预设 ──────────────────────────────────────────────────────
     @classmethod
     def tiny(cls) -> "ModelArgs":
-        """返回 Tiny（方案A）配置：约 25M 参数，适合单 GPU 训练。"""
+        """返回 Tiny（方案A）配置：适合单 GPU 训练。"""
         return cls()
 
     @classmethod

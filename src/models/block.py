@@ -45,9 +45,7 @@ class Block(nn.Module):
         self.attn = MLA(args)
         # 前馈子层：前 n_dense_layers 层用密集 MLP，后面的用 MoE
         self.ffn = (
-            MLP(args.dim, args.inter_dim)
-            if layer_id < args.n_dense_layers
-            else MoE(args)
+            MLP(args.dim, args.inter_dim) if layer_id < args.n_dense_layers else MoE(args)
         )
         # 两个 Pre-Norm 归一化层
         self.attn_norm = RMSNorm(args.dim)
