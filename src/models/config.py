@@ -182,7 +182,9 @@ class ModelArgs:
     @classmethod
     def tiny(cls) -> "ModelArgs":
         """返回 Tiny（方案A）配置：适合单 GPU 训练。"""
-        return cls()
+        return cls(
+            compress_ratios=(0, 0, 4, 128, 4, 128, 4, 0)
+        )
 
     @classmethod
     def original(cls) -> "ModelArgs":

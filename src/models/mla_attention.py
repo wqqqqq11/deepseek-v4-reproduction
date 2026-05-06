@@ -131,9 +131,12 @@ class Compressor(nn.Module):
         act_quant(kv[..., :-rd], 64, RuntimeConfig.default().scale_fmt, RuntimeConfig.default().scale_dtype, True)
 
         if start_pos == 0:
-            self.kv_cache[:bsz, :seqlen // ratio] = kv
+            # HCA缓存可能维度较大，只填充前head_dim列
+            cache_slice = self.kv_cache[:bsz, :seqlen // ratio, :kv.size(-1)]
+            cache_slice.copy_(kv)
         else:
-            self.kv_cache[:bsz, start_pos // ratio] = kv.squeeze(1)
+            cache_slice = self.kv_cache[:bsz, start_pos // ratio, :kv.size(-1)]
+            cache_slice.copy_(kv.squeeze(1))
 
         return kv
 
@@ -153,14 +156,16 @@ class Indexer(nn.Module):
         self.compress_ratio = compress_ratio
         self.q_lora_rank = args.q_lora_rank
 
-        self.wq_b = ColumnParallelLinear(self.q_lora_rank, self.n_heads * self.head_dim)
+        # Indexer使用独立的查询投影，输入维度取决于是否使用低秩
+        q_input_dim = self.q_lora_rank if self.q_lora_rank > 0 else self.dim
+        self.wq_b = ColumnParallelLinear(q_input_dim, self.n_heads * self.head_dim)
         self.weights_proj = ColumnParallelLinear(self.dim, self.n_heads, dtype=torch.bfloat16)
         self.softmax_scale = self.head_dim ** -0.5
 
         self.compressor = Compressor(args, compress_ratio, self.head_dim)
 
         max_cache_len = args.max_seq_len // compress_ratio
-        kv_cache_dim = self.kv_lora_rank + self.rope_head_dim
+        kv_cache_dim = self.head_dim
         self.register_buffer("kv_cache", torch.zeros(args.max_batch_size, max_cache_len, kv_cache_dim), persistent=False)
         self.freqs_cis = None
 
@@ -331,14 +336,11 @@ class MLA(nn.Module):
             self.compressor = None
             self.indexer = None
 
-        # KV 缓存：窗口部分 + 压缩部分
+        # KV 缓存：窗口部分（低秩）+ 压缩部分（全维度）
         kv_cache_size = args.window_size + (args.max_seq_len // self.compress_ratio if self.compress_ratio else 0)
-        kv_cache_dim = self.kv_lora_rank + self.rope_head_dim
+        # CSA窗口部分使用低秩维度，HCA压缩部分使用head_dim
+        kv_cache_dim = max(self.kv_lora_rank + self.rope_head_dim, self.head_dim)
         self.register_buffer("kv_cache", torch.zeros(args.max_batch_size, kv_cache_size, kv_cache_dim), persistent=False)
-        # 绑定 HCA 的缓存引用
-        if self.compress_ratio > 0:
-            self.compressor.kv_cache = self.kv_cache[:, args.window_size:]
-
         # RoPE 频率缓存
         if self.compress_ratio:
             orig_len, theta = args.original_seq_len, args.compress_rope_theta
@@ -347,6 +349,11 @@ class MLA(nn.Module):
         freqs_cis = precompute_freqs_cis(self.rope_head_dim, args.max_seq_len, orig_len,
                                          theta, args.rope_factor, args.beta_fast, args.beta_slow)
         self.register_buffer("freqs_cis", freqs_cis, persistent=False)
+
+        # 绑定 HCA 的缓存引用
+        if self.compress_ratio > 0:
+            self.compressor.kv_cache = self.kv_cache[:, args.window_size:]
+            self.compressor.freqs_cis = self.freqs_cis
 
         if self.compress_ratio > 0 and self.indexer is not None:
             self.indexer.freqs_cis = self.freqs_cis

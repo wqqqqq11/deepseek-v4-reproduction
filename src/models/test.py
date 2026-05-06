@@ -18,6 +18,6 @@ loss.backward()                            # 应该不报错
 # 检查每层都有梯度
 for name, param in model.named_parameters():
     if param.grad is None:
-        print(f"❌ {name}: grad is None")
+        print(f"[X] {name}: grad is None")
     else:
-        print(f"✅ {name}: grad shape {param.grad.shape}")
+        print(f"[OK] {name}: grad shape {param.grad.shape}")
