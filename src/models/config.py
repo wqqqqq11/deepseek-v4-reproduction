@@ -47,6 +47,10 @@ class ModelArgs:
     """使用密集 MLP（而非 MoE）的前几层数量。
     第 0 到 n_dense_layers-1 层使用 MLP，其余层使用 MoE。"""
 
+    n_hash_layers: int = 0
+    """使用 hash 路由的前几层数量。
+    前 n_hash_layers 层通过 token ID 直接查表获取专家，不使用门控网络。"""
+
     n_heads: int = 4
     """MLA（多头潜在注意力）的注意力头数。
     每个头的维度为 dim // n_heads = 128。"""
@@ -78,6 +82,11 @@ class ModelArgs:
     route_scale: float = 1.0
     """路由权重的缩放因子，在专家选择后乘以原始得分，用于控制专家输出大小。"""
 
+    # ── 归一化 ─────────────────────────────────────────────────────
+    norm_eps: float = 1e-6
+    """RMSNorm 的数值稳定性参数，防止除零。
+    用于所有 RMSNorm 层（Pre-Norm 和最终归一化）。"""
+
     # ── 多头潜在注意力（MLA） ────────────────────────────────────────
     q_lora_rank: int = 0
     """查询投影的低秩压缩维度。
@@ -87,6 +96,12 @@ class ModelArgs:
     kv_lora_rank: int = 128
     """键值投影的低秩压缩维度。
     KV 状态先压缩到此维度，可将 KV 缓存内存降低约 dim / kv_lora_rank 倍。"""
+
+    head_dim: int = 128
+    """注意力头的总维度（Query/Key/Value 的统一头维度）。
+    在 DeepSeek-V4 中通常为 512，但小模型可适当减小。
+    注意：qk_nope_head_dim + qk_rope_head_dim 可能不等于 head_dim，
+    因为 MLA 使用低秩分解重构机制。"""
 
     qk_nope_head_dim: int = 64
     """查询和键中非位置编码部分的每头维度（内容部分）。"""
@@ -124,6 +139,44 @@ class ModelArgs:
     """长序列扩展时注意力 softmax 缩放系数的乘数。
     当 max_seq_len > original_seq_len 时：
     softmax_scale *= 0.1 * mscale * ln(rope_factor) + 1.0。"""
+
+    # ── 混合稀疏注意力（CSA + HCA）───────────────────────────────────
+    window_size: int = 128
+    """CSA 滑动窗口大小。局部注意力只关注最近 window_size 个 token。
+    这是 DeepSeek-V4 处理短距离依赖的核心机制。"""
+
+    compress_ratios: tuple = ()
+    """每层 HCA 的压缩比率元组，长度应等于 n_layers。
+    0 表示该层不使用 HCA 压缩，仅使用 CSA 滑动窗口。
+    4 或 128 表示每 N 个 token 压缩为 1 个，用于长距离依赖。
+    示例: (0, 0, 4, 128, 4, 128, 4, 0) 表示交替使用不同压缩强度。"""
+
+    index_topk: int = 512
+    """HCA 全局检索的 top-k 数量。
+    从压缩后的历史 KV 中选择最相关的 512 个位置参与注意力。"""
+
+    index_n_heads: int = 4
+    """Indexer 用于评分检索的注意力头数。
+    使用独立的一组头来计算与压缩 KV 的相关性分数。"""
+
+    index_head_dim: int = 128
+    """Indexer 每个头的维度。"""
+
+    compress_rope_theta: float = 40000.0
+    """压缩 KV 使用的位置编码频率。
+    通常高于 rope_theta，以更好地区分压缩后的位置信息。"""
+
+    # ── Hyper-Connections（流形超连接）────────────────────────────────
+    hc_mult: int = 4
+    """Hyper-Connections 的倍数。维护 hc_mult 个并行残差流。
+    这是 DeepSeek-V4 解决超深 MoE 模型梯度消失的核心机制。
+    输入/输出维度: [batch, seq, hc_mult, dim]"""
+
+    hc_sinkhorn_iters: int = 20
+    """Sinkhorn 正则化的迭代次数。用于学习残差流的最优混合权重。"""
+
+    hc_eps: float = 1e-6
+    """Hyper-Connections 的数值稳定常数。"""
 
     # ── 便捷预设 ──────────────────────────────────────────────────────
     @classmethod

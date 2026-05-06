@@ -7,7 +7,7 @@ import torch
 from src.models.config import ModelArgs
 from src.models.transformer import Transformer
 
-args = ModelArgs.tiny()                    # 25M 参数
+args = ModelArgs.tiny()                    
 model = Transformer(args)
 tokens = torch.randint(0, args.vocab_size, (2, 128))
 logits = model(tokens)                     # 不需要 start_pos（训练模式）

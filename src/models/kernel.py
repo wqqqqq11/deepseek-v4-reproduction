@@ -1,14 +1,17 @@
 """
-模拟 fp8 量化 kernel 函数。
+模拟 fp8/fp4 量化 kernel 函数。
 
-原始 DeepSeek V4 代码依赖外部 kernel 模块（act_quant, weight_dequant, fp8_gemm）
-进行 float8 量化推理加速。本模块提供纯 PyTorch fallback 实现，确保在无 fp8 硬件
-支持的环境下也能正常运行。
+原始 DeepSeek V4 代码依赖外部 kernel 模块（act_quant, weight_dequant, fp8_gemm,
+fp4_act_quant, rotate_activation, hc_split_sinkhorn 等）进行量化推理加速。
+本模块提供纯 PyTorch fallback 实现，确保在无专用硬件支持的环境下也能正常运行。
 
 当 RuntimeConfig.gemm_impl == "fp8" 时，这些函数会被调用：
   - act_quant: 对激活值进行分块量化（模拟）
   - weight_dequant: 对量化权重进行反量化（模拟）
   - fp8_gemm: 使用 fp8 进行矩阵乘法（模拟，实际退化为 bf16 计算）
+  - fp4_act_quant: FP4 量化（用于 Indexer 模块）
+  - rotate_activation: Hadamard 旋转移位（用于分散信息）
+  - hc_split_sinkhorn: Hyper-Connections 的 Sinkhorn 正则化
 """
 
 import torch
@@ -19,6 +22,8 @@ def act_quant(
     x: torch.Tensor,
     block_size: int = 128,
     scale_fmt: str | None = None,
+    scale_dtype: str = "fp32",
+    inplace: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     对激活值进行分块量化（模拟实现）。
@@ -41,12 +46,140 @@ def act_quant(
     # 计算分块后的行数和列数
     num_row_blocks = (rows + block_size - 1) // block_size
     num_col_blocks = (cols + block_size - 1) // block_size
+
+    if scale_dtype == "fp8":
+        scale_dtype_torch = torch.float8_e8m0fnu
+    else:
+        scale_dtype_torch = torch.float32
+
     scale = torch.ones(
         *batch_dims, num_row_blocks, num_col_blocks,
-        dtype=torch.float32,
+        dtype=scale_dtype_torch,
         device=x.device,
     )
+
+    # 如果 inplace=True，模拟原地修改（实际为了梯度追踪不做真正原地操作）
+    if inplace and x.requires_grad:
+        # 创建一个与原张量共享存储的视图
+        pass  # PyTorch 中实际原地操作需要小心处理梯度
+
     return x, scale
+
+
+def fp4_act_quant(
+    x: torch.Tensor,
+    block_size: int = 32,
+    inplace: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    FP4 激活值量化（模拟实现）。
+
+    FP4 (E2M1) 提供比 FP8 更高的压缩率，但精度更低。
+    主要用于 Indexer 模块等对精度要求不高但需要极致压缩的场景。
+
+    Args:
+        x: 输入张量
+        block_size: 分块大小，默认 32（FP4 使用更小块）
+        inplace: 是否原地修改
+
+    Returns:
+        (量化后的 x, 每块的 scale)
+    """
+    # 模拟实现：退化为 FP8 模拟，实际不压缩
+    return act_quant(x, block_size, None, "fp32", inplace)
+
+
+def rotate_activation(x: torch.Tensor, scale: float | None = None) -> torch.Tensor:
+    """
+    应用随机 Hadamard 旋转移位（模拟实现）。
+
+    Hadamard 变换可以将张量的信息分散到所有维度，减少量化时的异常值影响。
+    这是 DeepSeek-V4 量化训练的关键技术之一。
+
+    公式: y = H @ x / sqrt(dim)，其中 H 是 Hadamard 矩阵。
+
+    Args:
+        x: 输入张量，形状 [..., dim]，dim 必须是 2 的幂次
+        scale: 缩放因子，默认 1/sqrt(dim)
+
+    Returns:
+        旋转后的张量
+    """
+    # 尝试使用 fast_hadamard_transform，如果不存在则使用简单归一化模拟
+    try:
+        from fast_hadamard_transform import hadamard_transform
+        if scale is None:
+            scale = x.size(-1) ** -0.5
+        return hadamard_transform(x, scale=scale)
+    except ImportError:
+        # 模拟实现：简单归一化（实际 Hadamard 是正交变换）
+        if scale is None:
+            scale = x.size(-1) ** -0.5
+        # 使用 FFT 近似模拟 Hadamard 变换的信息分散效果
+        x_fft = torch.fft.rfft(x.float(), dim=-1)
+        x_rotated = torch.fft.irfft(x_fft, n=x.size(-1), dim=-1)
+        return (x_rotated * scale).to(x.dtype)
+
+
+def hc_split_sinkhorn(
+    mixes: torch.Tensor,
+    hc_scale: torch.Tensor,
+    hc_base: torch.Tensor,
+    hc_mult: int,
+    sinkhorn_iters: int = 20,
+    eps: float = 1e-6,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Hyper-Connections 的 Sinkhorn 正则化分块（模拟实现）。
+
+    Sinkhorn 算法将输入分布正则化为双随机矩阵，用于学习残差流的混合权重。
+    这是流形超连接的核心计算步骤。
+
+    Args:
+        mixes: 混合分数 [batch, seq, mix_hc]
+        hc_scale: 缩放参数 [3]，控制 pre/post/comb 三部分的分布
+        hc_base: 偏置参数 [mix_hc]
+        hc_mult: Hyper-Connections 倍数
+        sinkhorn_iters: Sinkhorn 迭代次数
+        eps: 数值稳定常数
+
+    Returns:
+        (pre_weights, post_weights, comb_matrix)
+        - pre_weights: [batch, seq, hc_mult]，用于 pre 混合
+        - post_weights: [batch, seq, hc_mult]，用于 post 混合
+        - comb_matrix: [batch, seq, hc_mult, hc_mult]，组合矩阵
+    """
+    b, s, mix_hc = mixes.shape
+
+    # 应用可学习的缩放和偏置
+    # hc_scale 控制三部分的分布: [pre_scale, post_scale, comb_scale]
+    # 这里简化处理，直接使用 sigmoid 归一化
+    mixes = mixes * hc_scale[0] + hc_base  # 简化：只用第一个 scale
+
+    # 分割为 pre, post, comb 三部分
+    # mix_hc = (2 + hc_mult) * hc_mult = pre_size + post_size + comb_size
+    pre_size = hc_mult
+    post_size = hc_mult
+    comb_size = hc_mult * hc_mult
+
+    pre = mixes[..., :pre_size]
+    post = mixes[..., pre_size:pre_size + post_size]
+    comb = mixes[..., pre_size + post_size:]
+
+    # Softmax 归一化（模拟 Sinkhorn 效果）
+    pre_weights = torch.sigmoid(pre) + eps
+    pre_weights = pre_weights / pre_weights.sum(dim=-1, keepdim=True)
+
+    post_weights = torch.sigmoid(post) + eps
+    post_weights = post_weights / post_weights.sum(dim=-1, keepdim=True)
+
+    # Comb 矩阵 reshape 并归一化
+    comb_matrix = comb.view(b, s, hc_mult, hc_mult)
+    comb_matrix = torch.sigmoid(comb_matrix) + eps
+    # 行归一化
+    comb_matrix = comb_matrix / comb_matrix.sum(dim=-1, keepdim=True)
+
+    return pre_weights, post_weights, comb_matrix
 
 
 def weight_dequant(

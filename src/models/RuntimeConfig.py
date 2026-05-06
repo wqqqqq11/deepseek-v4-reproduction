@@ -33,26 +33,35 @@ class RuntimeConfig:
         world_size: int = 1,
         rank: int = 0,
         block_size: int = 128,
+        fp4_block_size: int = 32,
         gemm_impl: Literal["bf16", "fp8"] = "bf16",
         attn_impl: Literal["naive", "absorb"] = "absorb",
+        scale_fmt: Optional[str] = None,
+        scale_dtype: str = "fp32",
     ):
         """
         Args:
             world_size: 分布式训练的 GPU 总数，单机为 1。
             rank:       当前 GPU 在全局的排名（0 ~ world_size-1）。
             block_size: 分块量化的块大小（fp8 路径使用）。
+            fp4_block_size: FP4 量化的块大小（默认 32）。
             gemm_impl:  GEMM 实现模式：
                          - "bf16"  标准 bfloat16 线性
                          - "fp8"   模拟 float8 量化推理
             attn_impl:  注意力实现模式：
                          - "naive"  标准多头注意力，缓存完整 K/V
                          - "absorb" 低秩吸收模式，缓存潜变量以节省显存
+            scale_fmt:  量化缩放因子格式（"ue8m0" 或 None）。
+            scale_dtype: 缩放因子数据类型（"fp32" 或 "fp8"）。
         """
         self.world_size = world_size
         self.rank = rank
         self.block_size = block_size
+        self.fp4_block_size = fp4_block_size
         self.gemm_impl = gemm_impl
         self.attn_impl = attn_impl
+        self.scale_fmt = scale_fmt
+        self.scale_dtype = scale_dtype
 
     # ── 默认单例（向后兼容桥接） ────────────────────────────
 

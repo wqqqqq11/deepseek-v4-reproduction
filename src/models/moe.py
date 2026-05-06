@@ -8,7 +8,7 @@
     - MoE       混合专家模块，将 Gate、多个 Expert 和共享专家组合在一起
 """
 
-from typing import Tuple
+from typing import Tuple, Optional
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -87,74 +87,40 @@ class Gate(nn.Module):
         bias (Parameter|None): 可选门控偏置（仅 dim==7168 时使用）。
     """
 
-    def __init__(self, args: ModelArgs):
-        """
-        初始化门控模块。
-
-        Args:
-            args: 模型参数，包含 n_activated_experts、n_expert_groups、n_limited_groups、
-                  score_func、route_scale、n_routed_experts、dim 等。
-        """
+    def __init__(self, layer_id: int, args: ModelArgs):
         super().__init__()
         self.dim = args.dim
         self.topk = args.n_activated_experts
-        self.n_groups = args.n_expert_groups
-        self.topk_groups = args.n_limited_groups
         self.score_func = args.score_func
         self.route_scale = args.route_scale
+        self.hash = layer_id < args.n_hash_layers
         self.weight = nn.Parameter(torch.empty(args.n_routed_experts, args.dim))
-        # 偏置仅在与原始 DeepSeek 特定维度一致时使用
-        self.bias = nn.Parameter(torch.empty(args.n_routed_experts, dtype=torch.float32)) if self.dim == 7168 else None
+        if self.hash:
+            self.tid2eid = nn.Parameter(torch.empty(args.vocab_size, args.n_activated_experts, dtype=torch.int32), requires_grad=False)
+            self.bias = None
+        else:
+            self.bias = nn.Parameter(torch.empty(args.n_routed_experts, dtype=torch.float32))
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        前向传播，计算路由权重和专家索引。
-
-        Args:
-            x: 输入张量，形状 (num_tokens, dim)，通常已展平批次和序列维度。
-
-        Returns:
-            weights: (num_tokens, topk) 每个 token 分配给所选专家的权重。
-            indices: (num_tokens, topk) 所选专家的索引（int64）。
-        """
-        # 第1步：计算原始得分 logits
-        scores = linear(x, self.weight)                     # (num_tokens, n_routed_experts)
-
-        # 第2步：根据评分函数转换为概率/权重
+    def forward(self, x: torch.Tensor, input_ids: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        scores = linear(x.float(), self.weight.float())
         if self.score_func == "softmax":
             scores = scores.softmax(dim=-1, dtype=torch.float32)
+        elif self.score_func == "sigmoid":
+            scores = scores.sigmoid()
         else:
-            scores = scores.sigmoid()                       # sigmoid 得分
-        original_scores = scores.clone()                            # 保存原始权重，用于最终加权
-
-        # 第3步：加上可选的偏置
+            scores = F.softplus(scores).sqrt()
+        original_scores = scores
         if self.bias is not None:
             scores = scores + self.bias
-
-        # 第4步：分组路由（如果有多组）
-        if self.n_groups > 1:
-            # 将专家分数按组重塑
-            scores = scores.view(x.size(0), self.n_groups, -1)  # (num_tokens, n_groups, experts_per_group)
-            if self.bias is None:
-                group_scores = scores.amax(dim=-1)               # 每组取最高分
-            else:
-                group_scores = scores.topk(2, dim=-1)[0].sum(dim=-1)  # 有偏置时取 top-2 和
-            # 选出 topk_groups 个组
-            indices = group_scores.topk(self.topk_groups, dim=-1)[1]
-            mask = scores.new_ones(x.size(0), self.n_groups, dtype=bool).scatter_(1, indices, False)
-            scores = scores.masked_fill(mask.unsqueeze(-1), float("-inf")).flatten(1)
-
-        # 第5步：选择 top-k 专家
-        indices = torch.topk(scores, self.topk, dim=-1)[1]   # (num_tokens, topk)
-        weights = original_scores.gather(1, indices)          # 取对应原始权重
-
-        # 第6步：sigmoid 模式下需要归一化权重
-        if self.score_func == "sigmoid":
-            weights = weights / weights.sum(dim=-1, keepdim=True)
-
-        # 第7步：缩放权重
-        weights = weights * self.route_scale
-        return weights.type_as(x), indices
+        if self.hash:
+            indices = self.tid2eid[input_ids]
+        else:
+            indices = scores.topk(self.topk, dim=-1)[1]
+        weights = original_scores.gather(1, indices)
+        if self.score_func != "softmax":
+            weights /= weights.sum(dim=-1, keepdim=True)
+        weights *= self.route_scale
+        return weights, indices
 
 
 class Expert(nn.Module):
@@ -218,15 +184,17 @@ class MoE(nn.Module):
         shared_experts (MLP):      共享专家，每个 token 都经过。
     """
 
-    def __init__(self, args: ModelArgs):
+    def __init__(self, layer_id: int, args: ModelArgs):
         """
         初始化 MoE 模块。
 
         Args:
+            layer_id: 层索引，用于 Gate 的 hash 路由判断。
             args: 模型参数，包含 dim、n_routed_experts、n_activated_experts、
                   n_shared_experts、moe_inter_dim 等。
         """
         super().__init__()
+        self.layer_id = layer_id
         self.dim = args.dim
         # 替换全局 world_size
         assert args.n_routed_experts % RuntimeConfig.default().world_size == 0, (
@@ -239,7 +207,7 @@ class MoE(nn.Module):
         self.experts_start_idx = RuntimeConfig.default().rank * self.n_local_experts
         self.experts_end_idx = self.experts_start_idx + self.n_local_experts
 
-        self.gate = Gate(args)
+        self.gate = Gate(layer_id, args)
 
         # 创建专家列表：只有属于本 GPU 范围内的专家才实例化，其余为 None
         self.experts = nn.ModuleList([
@@ -252,12 +220,14 @@ class MoE(nn.Module):
         # 共享专家：所有 token 都会通过，内部维度 = shared_experts * moe_inter_dim
         self.shared_experts = MLP(args.dim, args.n_shared_experts * args.moe_inter_dim)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, input_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         前向传播。
 
         Args:
             x: 输入张量，形状 (batch_size, seq_len, dim)。
+            input_ids: 输入 token IDs，形状 (batch_size, seq_len)。
+                      用于 hash 路由（当前保留兼容性，未来可扩展）。
 
         Returns:
             同形状输出张量。
@@ -267,31 +237,42 @@ class MoE(nn.Module):
         x = x.view(-1, self.dim)
 
         # 第1步：门控路由，获取每个 token 的专家权重和索引
-        weights, indices = self.gate(x)                     # weights: (num_tokens, topk), indices: (num_tokens, topk)
+        # 如果 input_ids 不为 None，展平后传递给 Gate（用于 hash 路由）
+        if input_ids is not None:
+            flat_input_ids = input_ids.flatten()
+            weights, indices = self.gate(x, flat_input_ids)
+        else:
+            weights, indices = self.gate(x, None)           # weights: (num_tokens, topk), indices: (num_tokens, topk)
 
-        # 第2步：初始化输出张量
-        y = torch.zeros_like(x)
-
-        # 第3步：统计每个专家的 token 分配数量
+        # 第2步：统计每个专家的 token 分配数量
         counts = torch.bincount(indices.flatten(), minlength=self.n_routed_experts).tolist()
 
-        # 第4步：遍历本 GPU 持有的专家，对分配给它们的 token 进行计算
+        # 第3步：收集各专家输出（避免 in-place 操作以支持梯度追踪）
+        expert_outs = []
         for i in range(self.experts_start_idx, self.experts_end_idx):
             if counts[i] == 0:
-                continue   # 没有 token 路由到此专家，跳过
+                continue
             expert = self.experts[i]
-            # 找到所有被路由到专家 i 的 token 位置 (idx) 及其在 topk 中的排名 (top)
             idx, top = torch.where(indices == i)
-            # 专家输出 * 对应权重 累加到 y
-            y[idx] += expert(x[idx]) * weights[idx, top, None]   # None 用于广播乘法
+            out = expert(x[idx]) * weights[idx, top, None]
+            expert_outs.append((idx, out))
+
+        # 第4步：合并专家输出
+        # 从 x 派生零张量保持梯度连接，再用 scatter_add 聚合专家输出
+        if expert_outs:
+            all_idx = torch.cat([idx for idx, _ in expert_outs])
+            all_out = torch.cat([out for _, out in expert_outs], dim=0).type_as(x)
+            base = x * 0
+            y = base.scatter_add(0, all_idx.unsqueeze(-1).expand(-1, x.size(-1)), all_out)
+        else:
+            y = x * 0
 
         # 第5步：共享专家计算（所有 token 都经过）
         z = self.shared_experts(x)
 
-        # 第6步：分布式聚合：all_reduce 各 GPU 的专家输出
-        # 替换全局 world_size
+        # 第6步：分布式聚合
         if RuntimeConfig.default().world_size > 1:
             dist.all_reduce(y)
 
-        # 第7步：路由专家输出 + 共享专家输出，恢复形状
+        # 第7步：合并输出并恢复形状
         return (y + z).view(shape)
