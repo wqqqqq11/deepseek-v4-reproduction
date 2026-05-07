@@ -183,7 +183,8 @@ class ModelArgs:
     def tiny(cls) -> "ModelArgs":
         """返回 Tiny（方案A）配置：适合单 GPU 训练。"""
         return cls(
-            compress_ratios=(0, 0, 4, 128, 4, 128, 4, 0)
+            n_layers=12,
+            compress_ratios=(128, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 0)
         )
 
     @classmethod
@@ -192,18 +193,38 @@ class ModelArgs:
         return cls(
             max_batch_size=8,
             max_seq_len=16384,
-            vocab_size=102400,
-            dim=2048,
-            inter_dim=10944,
-            moe_inter_dim=1408,
-            n_layers=27,
-            n_heads=16,
-            n_routed_experts=64,
-            n_shared_experts=2,
+            vocab_size=129280,
+            dim=7168,
+            inter_dim=28672,
+            moe_inter_dim=3072,
+            n_layers=61,
+            n_dense_layers=3,
+            n_hash_layers=3,
+            n_heads=128,
+            n_routed_experts=384,
+            n_shared_experts=1,
             n_activated_experts=6,
+            n_expert_groups=8,
+            n_limited_groups=4,
+            score_func="sqrtsoftplus",
+            route_scale=2.5,
+            q_lora_rank=1536,
             kv_lora_rank=512,
-            qk_nope_head_dim=128,
+            head_dim=512,
+            qk_nope_head_dim=448,
             qk_rope_head_dim=64,
-            v_head_dim=128,
-            rope_factor=40,
+            v_head_dim=448,
+            original_seq_len=65536,
+            rope_theta=10000.0,
+            rope_factor=16,
+            beta_fast=32,
+            beta_slow=1,
+            mscale=1.0,
+            compress_ratios=(128, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 128, 4, 0),
+            index_topk=1024,
+            index_n_heads=64,
+            index_head_dim=128,
+            compress_rope_theta=160000.0,
+            hc_mult=4,
+            hc_sinkhorn_iters=20,
         )
