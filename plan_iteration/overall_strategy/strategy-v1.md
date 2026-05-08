@@ -181,3 +181,4 @@ All modules depend on:
 | MoE | [B, N, D] | [B, N, D] | 路由后 expert 计算 |
 | Block | [B, N, D] | [B, N, D] | 完整 decoder 层 |
 | Transformer | [B, N] | [B, N, V] | 输入 token ids，输出 logits |
+
