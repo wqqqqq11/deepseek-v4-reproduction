@@ -106,7 +106,7 @@ class Block(nn.Module):
             hc_scale: 缩放参数 [3] (pre/post/comb)
             hc_base: 偏置参数 [mix_hc]
 
-        Returns:
+        Returns: 
             (y, post, comb)
             - y: 混合后的输入 [batch, seq, dim]
             - post: post 混合权重 [batch, seq, hc_mult]

@@ -119,7 +119,7 @@ class Transformer(nn.Module):
 
         return y.to(dtype)
 
-    def forward(self, tokens: torch.Tensor, start_pos: int = 0):
+    def forward(self, tokens: torch.Tensor, start_pos: int = 0, return_all_logits: bool = False):
         """
         前向传播。
 
@@ -144,8 +144,12 @@ class Transformer(nn.Module):
         # 第4步：HC 合并为 1 个副本
         h = self.hc_head(h)  # [b, s, d]
 
-        # 第5步：最终归一化（只取最后一个 token 用于预测）
-        h = self.norm(h)[:, -1]  # [b, dim]
+        # 修改--适配训练模式
+        h = self.norm(h)
+
+        # 第5步：根据状态判定是否进行训练
+        if not return_all_logits:
+            h = h[:, -1]  # [b, dim]
 
         # 第6步：输出头投影到词表空间
         logits = self.head(h)  # [b, part_vocab_size]

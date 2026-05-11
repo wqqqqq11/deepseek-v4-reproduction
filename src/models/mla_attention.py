@@ -41,6 +41,7 @@ class Compressor(nn.Module):
         self.wkv = Linear(self.dim, coff * head_dim, dtype=torch.float32)
         self.wgate = Linear(self.dim, coff * head_dim, dtype=torch.float32)
         self.norm = RMSNorm(head_dim, args.norm_eps)
+        nn.init.zeros_(self.ape)
 
         self.kv_cache: Optional[Tensor] = None
         self.freqs_cis: Optional[Tensor] = None
@@ -317,6 +318,7 @@ class MLA(nn.Module):
 
         # Attention Sink（稳定长序列注意力的可学习偏差）
         self.attn_sink = nn.Parameter(torch.empty(self.n_local_heads, dtype=torch.float32))
+        nn.init.zeros_(self.attn_sink)
 
         # Softmax 缩放（含 YaRN 长序列调整）
         self.softmax_scale = self.head_dim ** -0.5
@@ -423,7 +425,7 @@ class MLA(nn.Module):
         else:
             topk_idxs = window_idxs
 
-        topk_idxs = topk_idxs.long()
+        topk_idxs = topk_idxs.long().to(self.kv_cache.device)
 
         # ---------- 更新 KV 缓存 ----------
         # 合并 kv 和 k_pe 为完整 head_dim
@@ -480,6 +482,9 @@ class MLA(nn.Module):
 
     def _gather_kv(self, kv_cache: Tensor, indices: Tensor) -> Tensor:
         """根据索引从 KV 缓存中收集稀疏 KV。"""
+        # 统一设备问题
+        indices = indices.to(kv_cache.device)
+        
         bsz, seqlen, k = indices.size()
         head_dim = kv_cache.size(-1)
 
