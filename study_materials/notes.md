@@ -1,5 +1,4 @@
 # transformer block 解析
-deepseek-v4-pro 的每个transformer block都由RMS Norm-->
 1 MoE（Mixture of Experts 混合专家） 详解
 1.1 总述
     每一个transformer_block都有一个MoE，1 个 Shared Expert + 384 个 Routed Expert（N_s = 1, N_r = 384）
