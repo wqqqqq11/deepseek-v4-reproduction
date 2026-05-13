@@ -1,12 +1,18 @@
 """质量过滤器"""
 
 import re
-import unicodedata
 import logging
-from typing import Dict, Optional
-
+import numpy as np
+from typing import Dict, Optional, List
 
 logger = logging.getLogger(__name__)
+
+
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
 
 
 class QualityFilter:
@@ -72,6 +78,75 @@ class QualityFilter:
         except Exception as e:
             logger.warning(f"英文过滤异常: {e}")
             return None
+
+    def batch_filter_chinese(self, texts: List[str]) -> List[int]:
+        """批量中文过滤，返回通过的索引列表"""
+        if not texts:
+            return []
+
+        try:
+            if PANDAS_AVAILABLE and len(texts) > 100:
+                return self._batch_filter_pandas(texts, 'chinese')
+            return [i for i, t in enumerate(texts) if self.filter_chinese(t)]
+        except Exception as e:
+            logger.warning(f"批量中文过滤异常: {e}, fallback到单条处理")
+            return [i for i, t in enumerate(texts) if self.filter_chinese(t)]
+
+    def batch_filter_english(self, texts: List[str]) -> List[int]:
+        """批量英文过滤，返回通过的索引列表"""
+        if not texts:
+            return []
+
+        try:
+            if PANDAS_AVAILABLE and len(texts) > 100:
+                return self._batch_filter_pandas(texts, 'english')
+            return [i for i, t in enumerate(texts) if self.filter_english(t)]
+        except Exception as e:
+            logger.warning(f"批量英文过滤异常: {e}, fallback到单条处理")
+            return [i for i, t in enumerate(texts) if self.filter_english(t)]
+
+    def _batch_filter_pandas(self, texts: List[str], lang: str) -> List[int]:
+        """使用pandas批量过滤"""
+        # 先过滤空字符串，记录原始索引
+        non_empty_indices = []
+        valid_texts = []
+        for i, text in enumerate(texts):
+            if text and len(text.strip()) >= 10:
+                non_empty_indices.append(i)
+                valid_texts.append(text)
+
+        if not valid_texts:
+            return []
+
+        s = pd.Series(valid_texts)
+        total_chars = s.str.len().values
+
+        chinese_counts = s.str.count(r'[一-龥]').values
+        english_counts = s.str.count(r'[a-zA-Z]').values
+        punct_counts = s.str.count(r'[^\w\s]').values
+        digit_counts = s.str.count(r'\d').values
+
+        chinese_ratio = chinese_counts / total_chars
+        english_ratio = english_counts / total_chars
+        punct_ratio = punct_counts / total_chars
+        digit_ratio = digit_counts / total_chars
+
+        valid_mask = (punct_ratio <= 0.5) & (digit_ratio <= 0.5)
+
+        if lang == 'chinese':
+            valid_mask &= chinese_ratio >= self.min_chinese_ratio
+        else:
+            valid_mask &= english_ratio >= self.min_english_ratio
+
+        printable_ratio = s.apply(
+            lambda x: sum(c.isprintable() for c in x) / len(x) if x else 0
+        ).values
+        valid_mask &= printable_ratio >= 0.8
+
+        # 映射回原始索引
+        valid_positions = np.where(valid_mask)[0].tolist()
+        valid_indices = [non_empty_indices[i] for i in valid_positions]
+        return valid_indices
 
     def _calc_stats(self, text: str) -> Dict[str, float]:
         """计算文本统计信息"""

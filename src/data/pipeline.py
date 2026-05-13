@@ -2,9 +2,11 @@
 
 import json
 import time
+import asyncio
 import logging
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from pathlib import Path
+from multiprocessing import cpu_count
 
 try:
     from datasets import load_dataset
@@ -14,11 +16,14 @@ except ImportError:
     AutoTokenizer = None
 
 from .config import DataConfig
-from .cleaners import CleaningChain, process_documents
+from .cleaners import CleaningChain, ParallelCleaner
 from .deduplicator import deduplicate_files
 from .tokenizer import tokenize_files
 from .chunker import process_and_chunk
-from .utils.io_utils import load_checkpoint, save_checkpoint, write_jsonl
+from .utils.io_utils import (
+    load_checkpoint, save_checkpoint, write_jsonl,
+    async_read_jsonl_batches, async_write_jsonl_batches
+)
 
 
 logging.basicConfig(
@@ -220,24 +225,127 @@ class DataPipeline:
         return doc_count, token_count
 
     def _stage_clean(self) -> Dict:
-        """阶段 1: 清洗数据"""
-        chain = CleaningChain(self.config.__dict__)
-
+        """阶段 1: 清洗数据 (异步并行版本)"""
         result = {'chinese': 0, 'english': 0}
 
         for lang in ['chinese', 'english']:
-            input_dir = self.config.get_stage_dir(0, lang)
-            output_dir = self.config.get_stage_dir(1, lang)
-
-            for input_file in sorted(input_dir.glob("*.jsonl")):
-                docs = self._read_jsonl_safe(str(input_file))
-                processed = process_documents(docs, chain, lang)
-
-                output_file = output_dir / input_file.name
-                count = write_jsonl(str(output_file), processed)
-                result[lang] += count
+            stats = self._clean_language_async(lang)
+            result[lang] = stats
 
         return result
+
+    def _clean_language_async(self, lang: str) -> int:
+        """异步清洗指定语言的数据"""
+        input_dir = self.config.get_stage_dir(0, lang)
+        output_dir = self.config.get_stage_dir(1, lang)
+
+        input_files = sorted(input_dir.glob("*.jsonl"))
+        if not input_files:
+            logger.warning(f"{lang}: 没有找到输入文件")
+            return 0
+
+        total_count = 0
+        batch_size = self.config.batch_size
+        num_workers = self.config.num_workers
+
+        with ParallelCleaner(self.config.__dict__, num_workers) as cleaner:
+            for input_file in input_files:
+                output_file = output_dir / input_file.name
+                count = asyncio.run(self._process_file_async(
+                    input_file, output_file, lang, cleaner, batch_size
+                ))
+                total_count += count
+                logger.info(f"{lang}: {input_file.name} 处理完成，共 {count} 条")
+
+        return total_count
+
+    async def _process_file_async(
+        self,
+        input_file: Path,
+        output_file: Path,
+        lang: str,
+        cleaner: ParallelCleaner,
+        batch_size: int
+    ) -> int:
+        """异步处理单个文件"""
+        read_queue = asyncio.Queue()
+        write_queue = asyncio.Queue()
+
+        reader_task = asyncio.create_task(
+            self._read_batches(input_file, batch_size, read_queue)
+        )
+
+        processor_task = asyncio.create_task(
+            self._process_batches(read_queue, write_queue, lang, cleaner)
+        )
+
+        writer_task = asyncio.create_task(
+            self._write_batches(write_queue, output_file)
+        )
+
+        await asyncio.gather(reader_task, processor_task, writer_task)
+        return writer_task.result()
+
+    async def _read_batches(
+        self,
+        input_file: Path,
+        batch_size: int,
+        queue: asyncio.Queue
+    ):
+        """异步读取批次"""
+        async for batch in async_read_jsonl_batches(str(input_file), batch_size):
+            await queue.put(batch)
+        await queue.put(None)
+
+    async def _process_batches(
+        self,
+        input_queue: asyncio.Queue,
+        output_queue: asyncio.Queue,
+        lang: str,
+        cleaner: ParallelCleaner
+    ):
+        """处理批次"""
+        loop = asyncio.get_event_loop()
+        processed_total = 0
+        batch_num = 0
+
+        while True:
+            batch = await input_queue.get()
+            if batch is None:
+                break
+
+            batch_num += 1
+            results = await loop.run_in_executor(
+                None, cleaner._process_batch_sync, batch, lang
+            )
+            await output_queue.put(results)
+
+            processed_total += len(batch)
+            if processed_total % 20000 == 0:
+                logger.info(f"{lang}: 已处理 {processed_total} 条")
+
+        logger.info(f"{lang}: 处理完成，共 {processed_total} 条，{batch_num} 个批次")
+        await output_queue.put(None)
+
+    async def _write_batches(
+        self,
+        input_queue: asyncio.Queue,
+        output_file: Path
+    ) -> int:
+        """异步写入批次"""
+        count = 0
+
+        async def batch_generator():
+            nonlocal count
+            while True:
+                batch = await input_queue.get()
+                if batch is None:
+                    break
+                count += len(batch)
+                yield batch
+
+        await async_write_jsonl_batches(str(output_file), batch_generator())
+        return count
 
     def _stage_deduplicate(self) -> Dict:
         """阶段 2: 去重"""

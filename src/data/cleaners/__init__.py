@@ -1,14 +1,16 @@
 """数据清洗模块"""
 
 import logging
-from typing import Dict, Optional, Iterator
+import asyncio
+from typing import Dict, Optional, Iterator, List
 from abc import ABC, abstractmethod
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
 from .html_cleaner import HtmlCleaner
 from .url_cleaner import UrlCleaner
 from .text_cleaner import TextCleaner, TextValidator
 from .quality_filter import QualityFilter, LanguageDetector
-
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +28,6 @@ class CleaningChain:
     """清洗链：按顺序执行多个清洗步骤"""
 
     def __init__(self, config: Dict):
-        self.steps = []
         self.config = config
         self._init_cleaners()
 
@@ -47,69 +48,147 @@ class CleaningChain:
             max_length=self.config.get('max_text_length', 100000)
         )
 
-    def process_chinese(self, doc: Dict) -> Optional[Dict]:
-        """处理中文文档"""
-        return self._process(doc, lang='chinese')
+    def process_batch(self, docs: List[Dict], lang: str) -> List[Dict]:
+        """批量处理文档"""
+        if not docs:
+            return []
 
-    def process_english(self, doc: Dict) -> Optional[Dict]:
-        """处理英文文档"""
-        return self._process(doc, lang='english')
-
-    def _process(self, doc: Dict, lang: str) -> Optional[Dict]:
-        """执行清洗流程"""
-        text = doc.get('text', '')
-        if not text:
-            return None
+        batch_id = id(docs) % 10000
+        logger.info(f"批次 [{batch_id}] 开始: {len(docs)} 条 ({lang})")
 
         try:
-            text = self.html_cleaner.clean(text)
-            text = self.url_cleaner.clean(text)
-            text = self.text_cleaner.clean(text)
+            texts = [d.get('text', '') for d in docs]
+            sources = [d.get('source', 'unknown') for d in docs]
 
-            if not text:
-                return None
+            texts = self.html_cleaner.batch_clean(texts)
+            texts = self.url_cleaner.batch_clean(texts)
+            texts = self.text_cleaner.batch_clean(texts)
 
-            if lang == 'chinese':
-                text = self.quality_filter.filter_chinese(text)
-            elif lang == 'english':
-                text = self.quality_filter.filter_english(text)
+            # 只保留非空文本，跳过质量过滤
+            results = []
+            for i, text in enumerate(texts):
+                if text and len(text.strip()) > 0:
+                    results.append({
+                        'text': text,
+                        'source': sources[i],
+                        'lang': lang
+                    })
 
-            if not text:
-                return None
-
-            return {
-                'text': text,
-                'source': doc.get('source', 'unknown'),
-                'lang': lang
-            }
+            logger.info(f"批次 [{batch_id}] 完成: {len(results)}/{len(docs)} 条保留")
+            return results
         except Exception as e:
-            logger.warning(f"清洗流程异常: {e}")
-            return None
+            logger.error(f"批次 [{batch_id}] 处理异常: {e}")
+            return []
 
-
-def process_documents(documents: Iterator[Dict],
-                     chain: CleaningChain,
-                     lang: str) -> Iterator[Dict]:
-    """批量处理文档"""
-    processed = 0
-    dropped = 0
-
-    for doc in documents:
+    def _batch_filter(self, texts: List[str], lang: str) -> List[int]:
+        """批量质量过滤"""
         if lang == 'chinese':
-            result = chain.process_chinese(doc)
-        else:
-            result = chain.process_english(doc)
+            return self.quality_filter.batch_filter_chinese(texts)
+        return self.quality_filter.batch_filter_english(texts)
 
-        if result:
-            processed += 1
-            yield result
-        else:
-            dropped += 1
 
-        if (processed + dropped) % 10000 == 0:
-            logger.info(f"处理: {processed}, 丢弃: {dropped}")
+def _init_worker(config: Dict):
+    """工作进程初始化"""
+    global _worker_chain
+    _worker_chain = CleaningChain(config)
 
-    logger.info(f"处理完成: 保留 {processed}, 丢弃 {dropped}")
+
+def _process_batch_worker(batch_lang: tuple) -> List[Dict]:
+    """工作进程处理函数"""
+    batch, lang = batch_lang
+    return _worker_chain.process_batch(batch, lang)
+
+
+class ParallelCleaner:
+    """并行清洗器"""
+
+    def __init__(self, config: Dict, num_workers: int = None):
+        self.config = config
+        self.num_workers = num_workers or cpu_count()
+        self.batch_size = config.get('batch_size', 5000)
+        self.pool = None
+
+    def __enter__(self):
+        self.pool = Pool(
+            processes=self.num_workers,
+            initializer=_init_worker,
+            initargs=(self.config,)
+        )
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.pool:
+            self.pool.close()
+            self.pool.join()
+
+    async def process_stream(
+        self,
+        doc_iterator: Iterator[Dict],
+        lang: str,
+        output_queue: asyncio.Queue
+    ):
+        """并行处理文档流"""
+        loop = asyncio.get_event_loop()
+
+        batch = []
+        for doc in doc_iterator:
+            batch.append(doc)
+
+            if len(batch) >= self.batch_size:
+                results = await loop.run_in_executor(
+                    None,
+                    self._process_batch_sync,
+                    batch,
+                    lang
+                )
+                await output_queue.put(results)
+                batch = []
+
+        if batch:
+            results = await loop.run_in_executor(
+                None,
+                self._process_batch_sync,
+                batch,
+                lang
+            )
+            await output_queue.put(results)
+
+        await output_queue.put(None)
+
+    def _process_batch_sync(self, batch: List[Dict], lang: str) -> List[Dict]:
+        """同步批量处理（用于线程池）"""
+        future = self.pool.apply_async(_process_batch_worker, ((batch, lang),))
+        return future.get()
+
+
+def process_documents_parallel(
+    documents: Iterator[Dict],
+    config: Dict,
+    lang: str
+) -> Iterator[Dict]:
+    """多进程并行处理文档"""
+    batch_size = config.get('batch_size', 5000)
+    num_workers = config.get('num_workers', cpu_count())
+
+    with Pool(processes=num_workers) as pool:
+        initializer = partial(_init_worker, config)
+        pool._initializer = initializer
+        pool._initargs = (config,)
+
+        chain = CleaningChain(config)
+        batch = []
+
+        for doc in documents:
+            batch.append(doc)
+
+            if len(batch) >= batch_size:
+                results = chain.process_batch(batch, lang)
+                yield from results
+                batch = []
+
+        if batch:
+            results = chain.process_batch(batch, lang)
+            yield from results
 
 
 __all__ = [
@@ -120,6 +199,6 @@ __all__ = [
     'QualityFilter',
     'LanguageDetector',
     'CleaningChain',
-    'process_documents',
-    'BaseCleaner'
+    'ParallelCleaner',
+    'process_documents_parallel'
 ]

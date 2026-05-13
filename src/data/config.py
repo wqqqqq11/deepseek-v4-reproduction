@@ -20,7 +20,7 @@ class DataConfig:
     context_size: int = 4096
     chunk_stride: int = 4097
 
-    min_text_length: int = 100
+    min_text_length: int = 10
     max_text_length: int = 100000
     min_chinese_ratio: float = 0.3
     min_english_ratio: float = 0.5
@@ -34,7 +34,9 @@ class DataConfig:
     english_target_tokens: int = 48_000_000
 
     log_interval: int = 10000
-    batch_size: int = 1000
+    batch_size: int = 5000
+    num_workers: int = 4
+    io_queue_size: int = 3
 
     def __post_init__(self):
         self._validate_ratios()

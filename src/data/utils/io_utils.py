@@ -2,12 +2,28 @@
 
 import json
 import logging
+import asyncio
 import numpy as np
-from pathlib import Path
-from typing import Iterator, Dict, List, Tuple, Optional
 
+from pathlib import Path
+from typing import Iterator, Dict, List, Tuple, Optional, AsyncIterator
 
 logger = logging.getLogger(__name__)
+
+
+try:
+    import aiofiles
+    AIOFILES_AVAILABLE = True
+except ImportError:
+    AIOFILES_AVAILABLE = False
+    logger.warning("aiofiles not available, using sync fallback")
+
+
+try:
+    import orjson
+    ORJSON_AVAILABLE = True
+except ImportError:
+    ORJSON_AVAILABLE = False
 
 
 def write_jsonl(filepath: str, records: Iterator[Dict]) -> int:
@@ -152,3 +168,115 @@ def list_jsonl_files(directory: str) -> List[Path]:
     if not path.exists():
         return []
     return sorted(path.glob("*.jsonl"))
+
+
+async def async_read_jsonl_batches(
+    filepath: str,
+    batch_size: int = 5000
+) -> AsyncIterator[List[Dict]]:
+    """异步批量读取jsonl文件"""
+    path = Path(filepath)
+    if not path.exists():
+        logger.warning(f"文件不存在: {path}")
+        return
+
+    batch = []
+    line_num = 0
+
+    try:
+        if AIOFILES_AVAILABLE:
+            async with aiofiles.open(path, 'r', encoding='utf-8') as f:
+                async for line in f:
+                    line_num += 1
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        if ORJSON_AVAILABLE:
+                            record = orjson.loads(line)
+                        else:
+                            record = json.loads(line)
+                        batch.append(record)
+
+                        if len(batch) >= batch_size:
+                            yield batch
+                            batch = []
+                    except json.JSONDecodeError:
+                        logger.warning(f"解析失败 {path}:{line_num}")
+        else:
+            with open(path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line_num += 1
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        if ORJSON_AVAILABLE:
+                            record = orjson.loads(line)
+                        else:
+                            record = json.loads(line)
+                        batch.append(record)
+
+                        if len(batch) >= batch_size:
+                            yield batch
+                            batch = []
+                    except json.JSONDecodeError:
+                        logger.warning(f"解析失败 {path}:{line_num}")
+
+        if batch:
+            yield batch
+
+    except IOError as e:
+        logger.error(f"读取文件失败 {path}: {e}")
+        raise
+
+
+async def async_write_jsonl_batches(
+    filepath: str,
+    batches: AsyncIterator[List[Dict]]
+) -> int:
+    """异步批量写入jsonl文件"""
+    path = Path(filepath)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    count = 0
+    try:
+        if AIOFILES_AVAILABLE:
+            async with aiofiles.open(path, 'w', encoding='utf-8') as f:
+                async for batch in batches:
+                    for record in batch:
+                        if ORJSON_AVAILABLE:
+                            line = orjson.dumps(
+                                record,
+                                option=orjson.OPT_APPEND_NEWLINE
+                            ).decode('utf-8')
+                        else:
+                            line = json.dumps(record, ensure_ascii=False) + '\n'
+                        await f.write(line)
+                        count += 1
+
+                    if count % 10000 == 0:
+                        logger.info(f"已写入 {count} 条记录到 {path}")
+        else:
+            with open(path, 'w', encoding='utf-8') as f:
+                async for batch in batches:
+                    for record in batch:
+                        if ORJSON_AVAILABLE:
+                            line = orjson.dumps(
+                                record,
+                                option=orjson.OPT_APPEND_NEWLINE
+                            ).decode('utf-8')
+                        else:
+                            line = json.dumps(record, ensure_ascii=False) + '\n'
+                        f.write(line)
+                        count += 1
+
+                    if count % 10000 == 0:
+                        logger.info(f"已写入 {count} 条记录到 {path}")
+
+        logger.info(f"写入完成: {path}, 共 {count} 条记录")
+        return count
+
+    except IOError as e:
+        logger.error(f"写入文件失败 {path}: {e}")
+        raise
