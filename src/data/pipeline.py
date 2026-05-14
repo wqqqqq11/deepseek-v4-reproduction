@@ -390,7 +390,10 @@ class DataPipeline:
             stats = tokenize_files(
                 str(input_dir), str(output_dir),
                 self.config.tokenizer_name,
-                self.config.eos_token_id
+                self.config.eos_token_id,
+                num_workers=self.config.num_workers,
+                batch_size=self.config.batch_size,
+                use_async=True
             )
             result[lang] = stats
 
