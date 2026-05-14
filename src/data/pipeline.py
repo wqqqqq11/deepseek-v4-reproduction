@@ -20,7 +20,7 @@ from .cleaners import CleaningChain, ParallelCleaner
 from .deduplicator import deduplicate_files
 from .splitter import split_files
 from .tokenizer import tokenize_files
-from .chunker import process_and_chunk
+from .merger import merge_and_chunk
 from .utils.io_utils import (
     load_checkpoint, save_checkpoint, write_jsonl,
     async_read_jsonl_batches, async_write_jsonl_batches
@@ -405,10 +405,13 @@ class DataPipeline:
         english_dir = self.config.get_stage_dir(4, 'english')
         output_dir = self.config.get_stage_dir(5)
 
-        stats = process_and_chunk(
+        stats = merge_and_chunk(
             str(chinese_dir), str(english_dir), str(output_dir),
             self.config.chinese_ratio, self.config.english_ratio,
-            self.config.context_size
+            self.config.context_size,
+            num_workers=self.config.num_workers,
+            random_seed=self.config.random_seed,
+            use_parallel=True
         )
         return stats
 
