@@ -20,7 +20,8 @@ from .cleaners import CleaningChain, ParallelCleaner
 from .deduplicator import deduplicate_files
 from .splitter import split_files
 from .tokenizer import tokenize_files
-from .merger import merge_and_chunk
+from .merger import merge_documents
+from .binarizer import binarize_files
 from .utils.io_utils import (
     load_checkpoint, save_checkpoint, write_jsonl,
     async_read_jsonl_batches, async_write_jsonl_batches
@@ -400,15 +401,14 @@ class DataPipeline:
         return result
 
     def _stage_merge(self) -> Dict:
-        """阶段 5: 合并中英文并切块"""
+        """阶段 5: 合并中英文文档（文档级shuffle）"""
         chinese_dir = self.config.get_stage_dir(4, 'chinese')
         english_dir = self.config.get_stage_dir(4, 'english')
         output_dir = self.config.get_stage_dir(5)
 
-        stats = merge_and_chunk(
+        stats = merge_documents(
             str(chinese_dir), str(english_dir), str(output_dir),
             self.config.chinese_ratio, self.config.english_ratio,
-            self.config.context_size,
             num_workers=self.config.num_workers,
             random_seed=self.config.random_seed,
             use_parallel=True
@@ -416,35 +416,20 @@ class DataPipeline:
         return stats
 
     def _stage_binarize(self) -> Dict:
-        """阶段 6: 转为二进制格式"""
-        from .utils.io_utils import read_jsonl, write_bin
-
-        result = {}
+        """阶段 6: 转为二进制格式（连续 token 流）"""
         input_dir = self.config.get_stage_dir(5)
         output_dir = self.config.get_stage_dir(6)
 
-        for split in ['train', 'val', 'test']:
-            input_file = input_dir / f"{split}.jsonl"
-            output_file = output_dir / f"{split}.bin"
+        import numpy as np
+        dtype = np.uint16 if self.config.vocab_size <= 65535 else np.uint32
 
-            if not input_file.exists():
-                logger.warning(f"输入文件不存在: {input_file}")
-                result[split] = 0
-                continue
-
-            chunks = self._read_jsonl_safe(str(input_file))
-
-            def extract_xy():
-                for chunk in chunks:
-                    x = chunk.get('x', [])
-                    y = chunk.get('y', [])
-                    if x and y:
-                        yield (x, y)
-
-            count = write_bin(str(output_file), extract_xy())
-            result[split] = count
-
-        return result
+        stats = binarize_files(
+            str(input_dir), str(output_dir),
+            splits=['train', 'val', 'test'],
+            dtype=dtype,
+            num_workers=self.config.num_workers
+        )
+        return stats
 
     def _read_jsonl_safe(self, filepath: str):
         """安全读取 jsonl"""

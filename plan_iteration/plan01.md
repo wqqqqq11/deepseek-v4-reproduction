@@ -213,6 +213,6 @@ class DataConfig:
     min_english_ratio: float = 0.5    # 英文数据英文比例
     
     # Tokenizer
-    vocab_size: int = 32000
+    vocab_size: int = 16000
     eos_token_id: int = 2
 ```

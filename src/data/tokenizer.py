@@ -27,7 +27,7 @@ class TokenizerProcessor:
     def __init__(self,
                  tokenizer_name: str = "gpt2",
                  eos_token_id: int = 2,
-                 vocab_size: int = 32000):
+                 vocab_size: int = 16000):
         self.tokenizer_name = tokenizer_name
         self.eos_token_id = eos_token_id
         self.vocab_size = vocab_size
@@ -300,7 +300,7 @@ def tokenize_files(
                     None, _tokenize_file_sync,
                     input_file, output_file, processor
                 )
-            tasks.append((input_file.name, task))
+            tasks.append((str(rel_path), task))
 
         results = await asyncio.gather(*[t[1] for t in tasks])
         return dict((t[0], results[i]) for i, t in enumerate(tasks))

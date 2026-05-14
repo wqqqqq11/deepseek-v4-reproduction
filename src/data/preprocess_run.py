@@ -17,8 +17,9 @@ def main():
     # pipeline.run_stage(1) # html清洗，文本规范化
     # pipeline.run_stage(2) # 去重
     # pipeline.run_stage(3) # test / val / train 切分
-    # pipeline.run_stage(4) # tokenize
-    pipeline.run_stage(5) # test / val / train 合并且切分 and chunk
+    pipeline.run_stage(4) # tokenize
+    # pipeline.run_stage(5) # test / val / train 合并且切分 and chunk
+    # pipeline.run_stage(6) # binarize
 
     # 运行所有阶段
     # pipeline.run_all(start_stage=0)

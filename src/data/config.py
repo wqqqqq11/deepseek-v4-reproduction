@@ -25,7 +25,7 @@ class DataConfig:
     min_chinese_ratio: float = 0.3
     min_english_ratio: float = 0.5
 
-    vocab_size: int = 129280
+    vocab_size: int = 16000
     eos_token_id: int = 1
     tokenizer_name: str = "deepseek-ai/DeepSeek-V4-Pro-Base"
 
