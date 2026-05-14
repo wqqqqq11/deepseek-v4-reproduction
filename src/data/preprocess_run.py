@@ -15,7 +15,8 @@ def main():
     # 运行单个阶段
     # pipeline.run_stage(0)  # 下载
     # pipeline.run_stage(1) # html清洗，文本规范化
-    pipeline.run_stage(2) # 去重
+    # pipeline.run_stage(2) # 去重
+    pipeline.run_stage(3) # test / val / train 切分
 
     # 运行所有阶段
     # pipeline.run_all(start_stage=0)

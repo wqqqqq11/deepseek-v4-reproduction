@@ -37,6 +37,7 @@ class DataConfig:
     batch_size: int = 5000
     num_workers: int = 4
     io_queue_size: int = 3
+    random_seed: int = 42
 
     def __post_init__(self):
         self._validate_ratios()
@@ -53,25 +54,27 @@ class DataConfig:
 
     def _ensure_dirs(self):
         base = Path(self.base_data_dir)
-        for stage in ["0_raw", "1_cleaned", "2_deduplicated",
-                      "3_tokenized", "4_merged", "5_final"]:
+        for stage in ["0_raw", "1_cleaned", "2_deduplicated", "3_split",
+                      "4_tokenized", "5_merged", "6_binarize"]:
             (base / stage).mkdir(parents=True, exist_ok=True)
 
         (base / "1_cleaned" / "chinese").mkdir(parents=True, exist_ok=True)
         (base / "1_cleaned" / "english").mkdir(parents=True, exist_ok=True)
         (base / "2_deduplicated" / "chinese").mkdir(parents=True, exist_ok=True)
         (base / "2_deduplicated" / "english").mkdir(parents=True, exist_ok=True)
-        (base / "3_tokenized" / "chinese").mkdir(parents=True, exist_ok=True)
-        (base / "3_tokenized" / "english").mkdir(parents=True, exist_ok=True)
+        (base / "3_split" / "chinese").mkdir(parents=True, exist_ok=True)
+        (base / "3_split" / "english").mkdir(parents=True, exist_ok=True)
+        (base / "4_tokenized").mkdir(parents=True, exist_ok=True)
 
     def get_stage_dir(self, stage: int, lang: Optional[str] = None) -> Path:
         stage_names = {
             0: "0_raw",
             1: "1_cleaned",
             2: "2_deduplicated",
-            3: "3_tokenized",
-            4: "4_merged",
-            5: "5_final"
+            3: "3_split",
+            4: "4_tokenized",
+            5: "5_merged",
+            6: "6_binarize"
         }
         if stage not in stage_names:
             raise ValueError(f"无效的阶段编号: {stage}")

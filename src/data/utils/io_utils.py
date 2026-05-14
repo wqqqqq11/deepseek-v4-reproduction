@@ -233,16 +233,18 @@ async def async_read_jsonl_batches(
 
 async def async_write_jsonl_batches(
     filepath: str,
-    batches: AsyncIterator[List[Dict]]
+    batches: AsyncIterator[List[Dict]],
+    append: bool = False
 ) -> int:
     """异步批量写入jsonl文件"""
     path = Path(filepath)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     count = 0
+    mode = 'a' if append else 'w' 
     try:
         if AIOFILES_AVAILABLE:
-            async with aiofiles.open(path, 'w', encoding='utf-8') as f:
+            async with aiofiles.open(path, mode, encoding='utf-8') as f:
                 async for batch in batches:
                     for record in batch:
                         if ORJSON_AVAILABLE:
@@ -258,7 +260,7 @@ async def async_write_jsonl_batches(
                     if count % 10000 == 0:
                         logger.info(f"已写入 {count} 条记录到 {path}")
         else:
-            with open(path, 'w', encoding='utf-8') as f:
+            with open(path, mode, encoding='utf-8') as f:
                 async for batch in batches:
                     for record in batch:
                         if ORJSON_AVAILABLE:

@@ -25,11 +25,10 @@
    标点/数字/乱码比例异常的丢弃
 
 5. 去重
-   先精确去重
-   有精力再做近似去重
+   近似去重
 
 6. 文档级划分
-   train / val / test (8:1:1)
+   先分别将chinese和english数据集划分为 train / val / test （8:1:1）后再两两合并 train / val / test (8:1:1)
 
 7. tokenize
    每篇文档 encode 成 token ids
@@ -62,7 +61,7 @@ src/data/
 │   ├── url_cleaner.py           # URL 清洗
 │   ├── text_cleaner.py          # 异常符号、乱码、空文本、长短文本过滤
 │   └── quality_filter.py        # 质量过滤（语言比例、标点/数字比例）
-├── deduplicator.py              # 精确去重（文档级哈希）
+├── deduplicator.py              # 去重
 ├── tokenizer.py                 # Byte-level BPE Tokenize + eos_token 处理
 ├── chunker.py                   # 文档拼接 + 切块（4097→x[4096]/y[4096]）
 ├── pipeline.py                  # 完整预处理流水线编排（支持断点续处理）

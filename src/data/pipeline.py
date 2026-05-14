@@ -18,6 +18,7 @@ except ImportError:
 from .config import DataConfig
 from .cleaners import CleaningChain, ParallelCleaner
 from .deduplicator import deduplicate_files
+from .splitter import split_files
 from .tokenizer import tokenize_files
 from .chunker import process_and_chunk
 from .utils.io_utils import (
@@ -68,9 +69,10 @@ class DataPipeline:
             0: self._stage_download,
             1: self._stage_clean,
             2: self._stage_deduplicate,
-            3: self._stage_tokenize,
-            4: self._stage_chunk,
-            5: self._stage_binarize,
+            3: self._stage_split,
+            4: self._stage_tokenize,
+            5: self._stage_merge,
+            6: self._stage_binarize,
         }
 
         if stage_num not in handlers:
@@ -91,7 +93,7 @@ class DataPipeline:
     def run_all(self, start_stage: int = 0) -> Dict:
         """运行所有阶段"""
         results = {}
-        for stage in range(start_stage, 6):
+        for stage in range(start_stage, 7):
             results[stage] = self.run_stage(stage, resume=True)
         return results
 
@@ -360,13 +362,30 @@ class DataPipeline:
 
         return result
 
+    def _stage_split(self) -> Dict:
+        """阶段 3: 划分数据集"""
+        chinese_input = self.config.get_stage_dir(2, 'chinese')
+        english_input = self.config.get_stage_dir(2, 'english')
+        output_dir = self.config.get_stage_dir(3)
+
+        stats = split_files(
+            str(chinese_input),
+            str(english_input),
+            str(output_dir),
+            self.config.split_ratio,
+            self.config.random_seed,
+            use_async=True
+        )
+
+        return stats
+
     def _stage_tokenize(self) -> Dict:
-        """阶段 3: Tokenize"""
+        """阶段 4: Tokenize"""
         result = {}
 
         for lang in ['chinese', 'english']:
-            input_dir = self.config.get_stage_dir(2, lang)
-            output_dir = self.config.get_stage_dir(3, lang)
+            input_dir = self.config.get_stage_dir(3, lang)
+            output_dir = self.config.get_stage_dir(4, lang)
 
             stats = tokenize_files(
                 str(input_dir), str(output_dir),
@@ -377,11 +396,11 @@ class DataPipeline:
 
         return result
 
-    def _stage_chunk(self) -> Dict:
-        """阶段 4: 切块并混合"""
-        chinese_dir = self.config.get_stage_dir(3, 'chinese')
-        english_dir = self.config.get_stage_dir(3, 'english')
-        output_dir = self.config.get_stage_dir(4)
+    def _stage_merge(self) -> Dict:
+        """阶段 5: 合并中英文并切块"""
+        chinese_dir = self.config.get_stage_dir(4, 'chinese')
+        english_dir = self.config.get_stage_dir(4, 'english')
+        output_dir = self.config.get_stage_dir(5)
 
         stats = process_and_chunk(
             str(chinese_dir), str(english_dir), str(output_dir),
@@ -391,12 +410,12 @@ class DataPipeline:
         return stats
 
     def _stage_binarize(self) -> Dict:
-        """阶段 5: 转为二进制格式"""
+        """阶段 6: 转为二进制格式"""
         from .utils.io_utils import read_jsonl, write_bin
 
         result = {}
-        input_dir = self.config.get_stage_dir(4)
-        output_dir = self.config.get_stage_dir(5)
+        input_dir = self.config.get_stage_dir(5)
+        output_dir = self.config.get_stage_dir(6)
 
         for split in ['train', 'val', 'test']:
             input_file = input_dir / f"{split}.jsonl"
