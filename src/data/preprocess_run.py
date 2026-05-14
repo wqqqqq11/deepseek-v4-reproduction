@@ -14,9 +14,10 @@ def main():
 
     # 运行单个阶段
     # pipeline.run_stage(0)  # 下载
-    pipeline.run_stage(1) # html清洗，文本规范化
+    # pipeline.run_stage(1) # html清洗，文本规范化
+    pipeline.run_stage(2) # 去重
 
-    # 或运行所有阶段
+    # 运行所有阶段
     # pipeline.run_all(start_stage=0)
 
 if __name__ == "__main__":
