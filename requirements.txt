@@ -12,3 +12,4 @@ orjson
 pandas
 numpy
 pybloom-live
+sentencepiece==0.2.1

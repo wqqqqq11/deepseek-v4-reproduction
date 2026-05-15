@@ -25,9 +25,9 @@ class TokenizerProcessor:
     """BPE Tokenizer 处理器"""
 
     def __init__(self,
-                 tokenizer_name: str = "gpt2",
+                 tokenizer_name: str = "XiaoduoAILab/Xmodel_LM",
                  eos_token_id: int = 2,
-                 vocab_size: int = 16000):
+                 vocab_size: int = 32000):
         self.tokenizer_name = tokenizer_name
         self.eos_token_id = eos_token_id
         self.vocab_size = vocab_size
@@ -63,7 +63,9 @@ class TokenizerProcessor:
 
         try:
             ids = self.tokenizer.encode(text, add_special_tokens=False)
-            ids.append(self.tokenizer.eos_token_id or self.eos_token_id)
+            ids = [min(tid, self.vocab_size - 1) for tid in ids]
+            eos_id = min(self.tokenizer.eos_token_id or self.eos_token_id, self.vocab_size - 1)
+            ids.append(eos_id)
             return ids
         except Exception as e:
             logger.warning(f"编码失败: {e}")

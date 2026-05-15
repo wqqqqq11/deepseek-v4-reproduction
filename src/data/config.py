@@ -25,9 +25,9 @@ class DataConfig:
     min_chinese_ratio: float = 0.3
     min_english_ratio: float = 0.5
 
-    vocab_size: int = 16000
-    eos_token_id: int = 1
-    tokenizer_name: str = "deepseek-ai/DeepSeek-V4-Pro-Base"
+    vocab_size: int = 32000
+    eos_token_id: int = 2
+    tokenizer_name: str = "XiaoduoAILab/Xmodel_LM"
 
     total_target_tokens: int = 120_000_000
     chinese_target_tokens: int = 72_000_000
