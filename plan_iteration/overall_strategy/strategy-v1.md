@@ -1,4 +1,4 @@
-# 目标：复现deepseek-v4模型（10M 参数），不追求参数规模和性能一致，重点复现以下机制：
+# 目标：复现deepseek-v4模型（5M 参数），不追求参数规模和性能一致，重点复现以下机制：
         1. DeepSeekMoE：Hash-routed MoE + learned-gate MoE
         2. Hybrid Attention：CSA/HCA + sliding window KV
         3. mHC：多残差流 + Sinkhorn 约束
@@ -33,55 +33,44 @@
 # 训练策略
 ## 阶段 1：通用基座大规模预训练
     定位：打底通用语言、百科、常识、基础文理知识
-    数据总量：120M Tokens
+    数据总量：15M Tokens
     数据集： 中文（60%）：https://huggingface.co/datasets/opencsg/Fineweb-Edu-Chinese-V2.1
             英文（40%）：https://huggingface.co/datasets/togethercomputer/RedPajama-Data-V2
 
 ## 阶段 2：超长上下文扩窗续训（简化版）
-    上下文：从 4K → 8K
-    数据：使用阶段 1 的通用普通文本（10M tokens 数据量）
-    训练：只续训1000步
+    上下文：从 1K → 2K
+    数据：使用阶段 1 的通用普通文本（1.5M tokens 数据量）,中英文（6:4）
+    训练：按tokens计算
 
 ## 阶段 3：分领域独立专家训练（SFT + GRPO）
     独立拆分 5 大领域（为了简化训练，这里采用3大领域），每个领域用专属数据单独微调训练：
-    数据总量：48M tokens
+    数据总量：6M tokens
     数据：每个领域只用自己的垂直语料
 
     训练方式：固定 V4 主干，只精调对应领域专家分支
     目的：让每个专家在自己领域达到最优能力
 
-    专家类型	总 Token	SFT（70%，基础能力）	GRPO（30%，专家强化）	数据集与组合比例
-    数学推理	16M	        11.2M	                4.8M	                SFT：
-                                                                                1. openbmb/UltraData-Math：50% = 5.60M tokens
-                                                                                2. AI-MO/NuminaMath-CoT：30% = 3.36M tokens
-                                                                                3. EleutherAI/hendrycks_math：20% = 2.24M tokens
+    专家类型	总 Token	SFT（90%，基础能力）	GRPO（10%，专家强化）	数据集与组合比例
+    数学推理	2M	        1.8M	                0.2M	             SFT：
+                                                                    1. openbmb/UltraData-Math：70%
+                                                                    2. AI-MO/NuminaMath-CoT：30% 
 
-                                                                            GRPO：
-                                                                                1. EleutherAI/hendrycks_math：40% = 1.92M tokens
-                                                                                2. openai/gsm8k：35% = 1.68M tokens
-                                                                                3. AI-MO/NuminaMath-CoT：25% = 1.20M tokens
-    代码生成	16M	        11.2M	                4.8M	                SFT：
-                                                                                1. bigcode/the-stack-v2 instruction 化子集：45% = 5.04M tokens
-                                                                                2. ise-uiuc/Magicoder-OSS-Instruct-75K：30% = 3.36M tokens
-                                                                                3. m-a-p/CodeFeedback-Filtered-Instruction：25% = 2.80M tokens
+                                                                  GRPO：
+                                                                    1. openai/gsm8k：100%
+          
+    代码生成	2M	        1.8M	                0.2M	             SFT：
+                                                                    1. ise-uiuc/Magicoder-OSS-Instruct-75K：60%
+                                                                    3. m-a-p/CodeFeedback-Filtered-Instruction：40% 
 
-                                                                            GRPO：
-                                                                                1. codeparrot/apps：50% = 2.40M tokens
-                                                                                2. google-research-datasets/mbpp：25% = 1.20M tokens
-                                                                                3. Vezora/Code-Preference-Pairs：25% = 1.20M tokens
-    科研学术	16M	        11.2M	                4.8M	                 SFT：
-                                                                                1. ccdv/arxiv-summarization：50% = 5.60M tokens
-                                                                                    - 不直接塞全文
-                                                                                    - 使用 title + abstract + section chunks
-                                                                                    - 对超长论文做 chunking
-                                                                                    - 控制单样本长度 <= 当前上下文窗口
-                                                                                2. allenai/SciRIFF：30% = 3.36M tokens
-                                                                                3. qiaojin/PubMedQA：20% = 2.24M tokens
+                                                                  GRPO：
+                                                                    1. codeparrot/apps（小 prompt pool）：100%
+                
+    科研学术	2M	        40M	                10M	                 SFT：         
+                                                                    1. allenai/SciRIFF：60% 
+                                                                    2. qiaojin/PubMedQA：40%
 
-                                                                            GRPO：
-                                                                                1. allenai/SciRIFF：50% = 2.40M tokens
-                                                                                2. qiaojin/PubMedQA：30% = 1.44M tokens
-                                                                                3. allenai/scifact：20% = 0.96M tokens
+                                                                  GRPO：
+                                                                    1. allenai/scifact：100% 
     
     注意：SFT 和 GRPO 可以使用同源数据集，但必须切分不同样本池。
             test split 不参与训练。
@@ -91,19 +80,20 @@
     训练方式：知识蒸馏 + 路径权重学习
     效果：一个模型同时拥有所有专家的领域能力，且互相不干扰
 
-    数据集构成（总共20M tokens）：
-    数据类型	        Token 量级	        占比	        数据来源
-    通用数据	         11M	            55%	            阶段 1 的通用高质量子集
-    代码 + 数学数据	     6M	                30%	            阶段 3 数学 / 代码专家的垂直数据核心子集
-    科研数据	         3M	                15%	            阶段 3 科研专家的垂直数据核心子集
+    数据集构成（总共1.5M tokens）：
+    数据类型	       	        Token占比	        数据来源
+    通用数据	         	        45%	         阶段 1 的通用高质量子集
+    代码数据	         	        20%	         阶段 3 代码专家的垂直数据核心子集
+    数学数据	         	        20%	         阶段 3 数学专家的垂直数据核心子集
+    科研数据	         	        15%	         阶段 3 科研专家的垂直数据核心子集
 
 ## 阶段 5：最终对齐（轻量 SFT）
-### 有监督微调 SFT（1.5M）：通用指令、对话、任务对齐
-    领域	    占比	数据量	        数据集
-    通用指令	60%	    0.9M tokens 	https://huggingface.co/datasets/tatsu-lab/alpaca_cleaned（经典通用指令集）
-    数学推理	25%	    0.45M tokens 	https://huggingface.co/datasets/openbmb/UltraMath-Instruct（数学指令）
-    代码生成	15%	    0.15M tokens 	https://huggingface.co/datasets/HuggingFaceH4/code_alpaca_2k（代码指令）
-
+### 有监督微调 SFT（1M tokens）：通用指令、对话、任务对齐
+    领域	    token 占比		        数据集
+    通用指令	45%	    	            https://huggingface.co/datasets/tatsu-lab/alpaca_cleaned（经典通用指令集）
+    数学推理	20%	     	            https://huggingface.co/datasets/openbmb/UltraMath-Instruct（数学指令）
+    代码生成	20%	     	            https://huggingface.co/datasets/HuggingFaceH4/code_alpaca_2k（代码指令）
+    科研问答  15%     
 # 项目代码结构 (src/models/)
 
 ```
@@ -249,3 +239,24 @@ transformer.py
 | hc_pre | [B, S, hc, D] | ([B, S, D], [B, S, hc], [B, S, hc, hc]) | 混合为1个 + 返回 post/comb 权重 |
 | hc_post | ([B, S, D], [B, S, hc, D], [B, S, hc], [B, S, hc, hc]) | [B, S, hc, D] | 扩展并混合残差流 |
 
+## 推荐参数配置
+```
+vocab_size = 32000
+hidden_size = 384
+num_hidden_layers = 8
+num_attention_heads = 8
+num_key_value_heads = 4
+
+intermediate_size = 1024      # shared expert / dense fallback
+moe_intermediate_size = 512   # 每个 routed expert 的 FFN hidden
+
+num_routed_experts = 4
+num_shared_experts = 1
+num_experts_per_tok = 1      
+n_hash_layers = 2             # 前 2 层 hash-routed
+hc_mult = 2                  
+
+max_position_embeddings = 4096
+rope_dim = 64
+tie_word_embeddings = True
+```

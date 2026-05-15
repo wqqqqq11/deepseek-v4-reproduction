@@ -1,6 +1,6 @@
 # 阶段 1：通用基座大规模预训练
     定位：打底通用语言、百科、常识、基础文理知识
-    数据总量：120M Tokens
+    数据总量：650M Tokens
     数据集： 中文（60%）：https://huggingface.co/datasets/opencsg/Fineweb-Edu-Chinese-V2.1
             英文（40%）：https://huggingface.co/datasets/togethercomputer/RedPajama-Data-V2
 ## 数据集预处理
@@ -39,10 +39,8 @@
    val 文档拼成 val_token_stream
    test 文档拼成 test_token_stream
 
-9. 切块
-   每 4097 个 token 切一块
-   x = 前 4096
-   y = 后 4096
+9. 转为.bin格式
+   读取每个 split 的 jsonl，把 input_ids 展平写入连续的 bin 文件，保持原有切分结构不变。
 
 10. 训练
    model(x)

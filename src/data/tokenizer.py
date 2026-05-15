@@ -25,9 +25,9 @@ class TokenizerProcessor:
     """BPE Tokenizer 处理器"""
 
     def __init__(self,
-                 tokenizer_name: str = "XiaoduoAILab/Xmodel_LM",
+                 tokenizer_name: str = "jingyaogong/minimind-3",
                  eos_token_id: int = 2,
-                 vocab_size: int = 32000):
+                 vocab_size: int = 6400):
         self.tokenizer_name = tokenizer_name
         self.eos_token_id = eos_token_id
         self.vocab_size = vocab_size

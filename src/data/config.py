@@ -25,13 +25,13 @@ class DataConfig:
     min_chinese_ratio: float = 0.3
     min_english_ratio: float = 0.5
 
-    vocab_size: int = 32000
+    vocab_size: int = 6400
     eos_token_id: int = 2
-    tokenizer_name: str = "XiaoduoAILab/Xmodel_LM"
+    tokenizer_name: str = "jingyaogong/minimind-3"
 
-    total_target_tokens: int = 120_000_000
-    chinese_target_tokens: int = 72_000_000
-    english_target_tokens: int = 48_000_000
+    total_target_tokens: int = 15_000_000
+    chinese_target_tokens: int = 9_000_000
+    english_target_tokens: int = 6_000_000
 
     log_interval: int = 10000
     batch_size: int = 5000
