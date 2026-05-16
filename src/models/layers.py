@@ -126,6 +126,18 @@ class Linear(nn.Module):
         else:
             self.register_parameter("bias", None)
 
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        if self.weight.element_size() > 1:
+            nn.init.normal_(self.weight, mean=0.0, std=0.02)
+        else:
+            nn.init.zeros_(self.weight)
+        if self.scale is not None:
+            nn.init.ones_(self.scale)
+        if self.bias is not None:
+            nn.init.zeros_(self.bias)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """前向传播，委托给 linear() 函数处理。"""
         return linear(x, self.weight, self.bias, self.scale_fmt)
@@ -235,6 +247,7 @@ class ParallelEmbedding(nn.Module):
         self.vocab_start_idx = rank * self.part_vocab_size
         self.vocab_end_idx = self.vocab_start_idx + self.part_vocab_size
         self.weight = nn.Parameter(torch.empty(self.part_vocab_size, self.dim))
+        nn.init.normal_(self.weight, mean=0.0, std=0.02)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """

@@ -101,6 +101,20 @@ class Gate(nn.Module):
         else:
             self.bias = nn.Parameter(torch.empty(args.n_routed_experts, dtype=torch.float32))
 
+        nn.init.normal_(self.weight, mean=0.0, std=0.02)
+        if self.hash:
+            with torch.no_grad():
+                self.tid2eid.copy_(
+                    torch.randint(
+                        0,
+                        args.n_routed_experts,
+                        self.tid2eid.shape,
+                        dtype=torch.int32,
+                    )
+                )
+        else:
+            nn.init.zeros_(self.bias)
+
     def forward(self, x: torch.Tensor, input_ids: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         scores = linear(x.float(), self.weight.float())
         if self.score_func == "softmax":
