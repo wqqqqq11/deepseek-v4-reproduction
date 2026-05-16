@@ -30,21 +30,29 @@ def _write_tokens_to_bin(input_file: str, output_file: str, dtype=np.uint16) -> 
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # 清空或创建文件
+    output_path.write_bytes(b'')
+
     token_buffer = []
     count = 0
+    chunk_size = 100000
+
+    def flush_buffer():
+        if not token_buffer:
+            return
+        arr = np.array(token_buffer, dtype=dtype)
+        with open(output_path, 'ab') as f:
+            f.write(arr.tobytes())
 
     for token in _jsonl_to_token_stream(input_file):
         token_buffer.append(token)
         count += 1
 
-        if len(token_buffer) >= 100000:
-            arr = np.array(token_buffer, dtype=dtype)
-            arr.tofile(str(output_path))
+        if len(token_buffer) >= chunk_size:
+            flush_buffer()
             token_buffer = []
 
-    if token_buffer:
-        arr = np.array(token_buffer, dtype=dtype)
-        arr.tofile(str(output_path))
+    flush_buffer()
 
     logger.info(f"写入完成: {output_file}, 共 {count} 个 tokens")
     return count
