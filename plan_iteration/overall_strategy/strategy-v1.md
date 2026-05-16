@@ -241,7 +241,7 @@ transformer.py
 
 ## 推荐参数配置
 ```
-vocab_size = 32000
+vocab_size = 6400
 hidden_size = 384
 num_hidden_layers = 8
 num_attention_heads = 8
