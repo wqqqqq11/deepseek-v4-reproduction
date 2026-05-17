@@ -53,9 +53,9 @@ mtp:
 
 # 训练参数
 training:
-  num_epochs: 2                 # 总训练轮数
+  num_epochs: 5                 # 总训练轮数
   batch_size: 16                # 批次大小
-  gradient_accumulation: 2      # 梯度累积步数
+  gradient_accumulation: 1      # 梯度累积步数
   
   # 学习率调度（三段式）
   max_lr: 1.0e-4                # 峰值学习率
@@ -91,7 +91,7 @@ optimizer:
 
 # 精度配置
 precision:
-  fp8_enabled: true             # 启用 FP8 模拟
+  fp8_enabled: true            # FP8 模拟控制
   compute_dtype: "bfloat16"       # 实际计算精度
   optimizer_state_dtype: "float16"
 

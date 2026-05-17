@@ -14,3 +14,4 @@ numpy
 pybloom-live
 sentencepiece==0.2.1
 tensorboard==2.20.0
+setuptools

@@ -121,8 +121,9 @@ class MLAStage1(nn.Module):
 
         q = q.view(bsz, seqlen, self.n_local_heads, self.head_dim)
 
-        # Query RMSNorm（DeepSeek-V4 特有）
-        q = q * torch.rsqrt(q.pow(2).mean(-1, keepdim=True) + 1e-6)
+        # Query RMSNorm（DeepSeek-V4 特有，使用 FP32 数值稳定计算）
+        q_norm = q.to(torch.float32).norm(dim=-1, keepdim=True)
+        q = (q / (q_norm + 1e-6) * (self.head_dim ** 0.5)).to(q.dtype)
 
         # 应用 RoPE（分离 nope 和 rope 部分）
         q_nope = q[..., :self.nope_head_dim]

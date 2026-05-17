@@ -63,23 +63,21 @@ class TokenDataset(IterableDataset):
         if not self.bin_path.exists():
             raise FileNotFoundError(f"Bin file not found: {bin_path}")
         
+        # 内存映射（先映射再计算）
+        self.tokens = np.memmap(bin_path, dtype=dtype, mode="r")
+        total_tokens = len(self.tokens)
+        
         # 读取 metadata
         self.metadata = self._load_metadata()
         
-        # 确定样本数
+        # 确定样本数（每个样本需要 context_size+1 个 token）
         if num_samples is not None:
             self.num_samples = num_samples
         elif self.metadata and "num_samples" in self.metadata:
             self.num_samples = self.metadata["num_samples"]
         else:
-            # 从文件大小计算
-            file_size = self.bin_path.stat().st_size
-            bytes_per_token = 2 if dtype == np.uint16 else 4
-            total_tokens = file_size // bytes_per_token
-            self.num_samples = max(0, total_tokens - context_size)
+            self.num_samples = total_tokens // (context_size + 1)
         
-        # 内存映射
-        self.tokens = np.memmap(bin_path, dtype=dtype, mode="r")
         self.epoch = 0
     
     def _load_metadata(self) -> Optional[Dict[str, Any]]:
@@ -106,14 +104,13 @@ class TokenDataset(IterableDataset):
         seed = self.base_seed + epoch
         rng = np.random.RandomState(seed)
         
-        # 生成所有可能的起始位置
-        max_start = len(self.tokens) - self.context_size - 1
-        indices = np.arange(max(0, min(max_start, self.num_samples)))
+        # 生成样本起始位置（步长为 context_size+1，确保不重叠）
+        indices = np.arange(self.num_samples) * (self.context_size + 1)
         
         # 打乱
         rng.shuffle(indices)
         
-        return indices[:self.num_samples]
+        return indices
     
     def _get_sample(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """

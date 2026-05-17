@@ -269,7 +269,7 @@ python mian.py --stage 1 --config configs/stage1_pretrain.yaml
 
 ---
 
-## 阶段1 预训练实现方案（最终版）
+## 阶段1 预训练实现方案
 
 ### 13. 模型架构设计（Dense + MLA）
 
@@ -584,8 +584,8 @@ precision:
 
 # 数据路径
 data:
-  train_bin: "datasets/stage_1_datasets/5_final/train.bin"
-  val_bin: "datasets/stage_1_datasets/5_final/val.bin"
+  train_bin: "datasets/stage_1_datasets/6_binarize/train.bin"
+  val_bin: "datasets/stage_1_datasets/6_binarize/val.bin"
   context_size: 1024
 
 # 日志与检查点
