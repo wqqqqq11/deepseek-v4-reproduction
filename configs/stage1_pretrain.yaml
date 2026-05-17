@@ -1,0 +1,130 @@
+# =====================================
+# 阶段1：通用基座预训练配置
+# =====================================
+# 模型：5M 参数 Dense Transformer + MLA
+# 数据：650M tokens（中英文 6:4）
+# 训练：2 epochs，batch=32，seq_len=1024
+# =====================================
+
+# 模型参数
+model:
+  vocab_size: 6400              # minimind tokenizer 适配
+  dim: 256                      # 隐藏层维度
+  n_layers: 8                   # Transformer 层数
+  n_heads: 8                    # 注意力头数
+  
+  # MLA 低秩压缩配置
+  q_lora_rank: 64               # Query 压缩维度
+  kv_lora_rank: 32              # KV 压缩维度
+  head_dim: 128                 # 注意力头维度
+  qk_nope_head_dim: 96          # 非 RoPE 部分维度
+  qk_rope_head_dim: 32          # RoPE 部分维度
+  v_head_dim: 96                # Value 头维度
+  
+  # FFN 配置
+  inter_dim: 688                # SwiGLU 中间层（2/3 * 4 * dim）
+  n_dense_layers: 8             # 全部使用 Dense MLP
+  
+  # 序列配置
+  max_seq_len: 512            # 阶段1序列长度
+  original_seq_len: 4096        # RoPE 基准长度
+  
+  # RoPE 配置
+  rope_theta: 10000.0           # 基础频率
+  rope_factor: 1.0              # 不扩展
+  beta_fast: 32                 # YaRN 参数
+  beta_slow: 1                  # YaRN 参数
+  
+  # 归一化
+  norm_eps: 1e-6                # RMSNorm epsilon
+  
+  # 禁用阶段1不需要的特性
+  compress_ratios: [0, 0, 0, 0, 0, 0, 0, 0]  # 不使用 HCA
+  hc_mult: 1                     # 不使用 Hyper-Connections
+  
+  # 权重共享
+  tie_word_embeddings: true
+
+# MTP（多令牌预测）配置
+mtp:
+  num_future_tokens: 2          # 预测未来2个token
+  loss_weight: 0.3              # 初始损失权重
+  loss_weight_decay_end: 0.1    # 衰减阶段最终权重
+
+# 训练参数
+training:
+  num_epochs: 2                 # 总训练轮数
+  batch_size: 16                # 批次大小
+  gradient_accumulation: 2      # 梯度累积步数
+  
+  # 学习率调度（三段式）
+  max_lr: 1.0e-4                # 峰值学习率
+  min_lr: 3.0e-5                # 最小学习率
+  warmup_steps: 3500            # 预热步数
+  peak_steps: 6000              # 峰值恒定步数
+  cosine_steps: 12000           # 余弦衰减步数
+  
+  # 正则化
+  grad_clip: 0.5               # 梯度裁剪范数
+  
+  # 随机种子
+  seed: 42
+
+# 优化器分组
+optimizer:
+  # Muon 参数组（使用二阶优化）
+  muon_groups: ["attn", "mlp"]
+  
+  # AdamW 参数组（使用一阶优化）
+  adamw_groups: ["embed", "head", "norm", "bias"]
+  
+  # 学习率
+  muon_lr: 3.0e-4
+  adamw_lr: 3.0e-4
+  
+  # Muon 固定超参（论文 Algorithm 1）
+  muon_momentum: 0.95
+  muon_gamma: 0.18
+  muon_nesterov: true
+
+  weight_decay: 0.1             # 权重衰减
+
+# 精度配置
+precision:
+  fp8_enabled: true             # 启用 FP8 模拟
+  compute_dtype: "bfloat16"       # 实际计算精度
+  optimizer_state_dtype: "float16"
+
+# 数据路径
+data:
+  train_bin: "datasets/stage_1_datasets/6_binarize/train.bin"
+  val_bin: "datasets/stage_1_datasets/6_binarize/val.bin"
+  context_size: 512
+  shuffle_seed: 42
+
+# 日志与检查点
+logging:
+  log_dir: "logs/stage1"
+  checkpoint_dir: "checkpoints/stage1"
+  
+  # 保存策略
+  save_best_only: true            # 只保存最优模型
+  eval_every_epoch: true          # 每 epoch 验证一次
+  
+  # 记录频率
+  log_every_steps: 10
+  tensorboard_port: 6006
+
+# 硬件配置
+hardware:
+  device: "cuda"
+  num_gpus: 1
+  use_compile: false            # 不使用 torch.compile
+
+# 元信息
+meta:
+  description: "DeepSeek-V4 阶段1预训练配置"
+  version: "1.0"
+  created: "2026-05-17"
+  total_tokens: 650000000
+  target_params: 5000000

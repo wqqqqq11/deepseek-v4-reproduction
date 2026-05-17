@@ -109,95 +109,6 @@ src/models/
 └── transformer.py           # DeepSeek-V4 主模型入口，组装完整模型
 ```
 
-## 各文件详细职责
-
-### config.py
-- **作用**：集中管理所有模型超参数
-- **内容**：`ModelArgs` 数据类，包含维度、层数、头数、MoE 专家数、上下文长度、MLA 配置、YaRN 配置、HC 配置等
-
-### RuntimeConfig.py
-- **作用**：运行时环境配置（实例化设计，避免全局状态）
-- **包含**：
-  - `RuntimeConfig`：分布式参数（world_size, rank）、量化参数（block_size, gemm_impl）、注意力实现模式
-  - 提供 `default()` 单例模式和 `from_distributed()` 工厂方法
-
-### layers.py
-- **作用**：基础层组件库（可拔插设计，不依赖全局变量）
-- **包含**：
-  - `linear()`：统一线性变换入口（支持 BF16/FP8 路径）
-  - `Linear`：自定义线性层（支持量化权重）
-  - `ColumnParallelLinear`：列并行线性层（输出维度切分）
-  - `RowParallelLinear`：行并行线性层（输入维度切分，需 all_reduce）
-  - `ParallelEmbedding`：分布式词嵌入层（按 world_size 切分词表）
-  - `RMSNorm`：根均方层归一化
-
-### rotary_embedding.py
-- **作用**：YaRN 扩展的旋转位置编码（RoPE）
-- **包含**：
-  - `precompute_freqs_cis()`：预计算旋转位置编码的复指数值（带 LRU 缓存）
-  - `apply_rotary_emb()`：将 RoPE 应用到输入张量
-
-### kernel.py
-- **作用**：FP8/FP4 量化 kernel 的纯 PyTorch fallback 实现
-- **包含**：
-  - `act_quant()`：激活值分块量化（模拟）
-  - `fp4_act_quant()`：FP4 激活值量化（模拟）
-  - `rotate_activation()`：Hadamard 旋转移位（模拟）
-  - `hc_split_sinkhorn()`：Hyper-Connections 的 Sinkhorn 正则化分块
-  - `weight_dequant()`：权重量化反量化（模拟）
-  - `fp8_gemm()`：FP8 矩阵乘法（退化为 BF16）
-
-### mla_attention.py
-- **作用**：MLA (Multi-Head Latent Attention) 多头潜在注意力完整实现
-- **包含组件**：
-  - `Compressor`：KV 缓存压缩器（门控池化压缩为低频表示）
-  - `Indexer`：压缩 KV 索引器（学习选择最相关的压缩 KV 位置）
-  - `get_window_indices()`：生成滑动窗口索引（CSA 局部注意力）
-  - `get_compress_indices()`：生成压缩 KV 固定间隔采样索引（HCA 全局稀疏）
-  - `MLA`：主类，集成低秩 KV 压缩 + CSA 滑动窗口 + HCA 压缩稀疏检索
-- **特性**：
-  - 低秩联合压缩（q_lora_rank / kv_lora_rank）减少 KV 缓存内存
-  - CSA (Context-Sparse Attention)：局部滑动窗口处理短距离依赖
-  - HCA (Hierarchical Context Attention)：全局压缩稀疏处理长距离依赖
-
-### moe.py
-- **作用**：DeepSeekMoE 混合专家架构实现
-- **包含模块**：
-  - `MLP`：多层感知机（SwiGLU 激活，用于共享专家和密集层）
-  - `Gate`：门控路由机制（支持 softmax/sigmoid/sqrt(softplus) 评分，可选 hash 路由）
-  - `Expert`：单个专家（小型 MLP）
-  - `MoE`：混合专家模块（整合 Gate + 多个 Expert + Shared Experts）
-- **特性**：
-  - 支持 hash 路由（前 n_hash_layers 层）和 learned gate 路由
-  - 分层路由（n_expert_groups + n_limited_groups）
-  - 共享专家（shared_experts）：所有 token 都经过
-  - 分布式专家切分：专家均匀分配到各 GPU
-
-### block.py
-- **作用**：单个 Transformer Decoder 层，带 Hyper-Connections (HC) 流形超连接
-- **结构**：
-  - 输入/输出：`[B, S, hc_mult, D]`（维护 hc_mult 个并行残差流）
-  - Attention 子层：`hc_pre` → RMSNorm → MLA → `hc_post`
-  - FFN 子层：`hc_pre` → RMSNorm → MoE → `hc_post`
-- **Hyper-Connections 实现**：
-  - `hc_pre()`：通过 Sinkhorn 正则化将 hc_mult 个副本混合为 1 个输入子层
-  - `hc_post()`：将子层输出扩展回 hc_mult 个副本，并与残差流混合
-
-### transformer.py
-- **作用**：DeepSeek-V4 主模型
-- **数据流**：
-  ```
-  tokens → ParallelEmbedding → [B,S,D]
-         → expand to hc_mult → [B,S,hc,D]
-         → Block × N (每层 HC 混合) → [B,S,hc,D]
-         → hc_head (合并 hc) → [B,S,D]
-         → RMSNorm → LM Head → logits
-  ```
-- **Hyper-Connections 流程**：
-  1. 嵌入后扩展：`[b,s,d]` → `[b,s,hc,d]`
-  2. 每层 Block：输入/输出均为 `[b,s,hc,d]`
-  3. 最终合并：`[b,s,hc,d]` → `[b,s,d]`
-
 ## 模块依赖关系
 
 ```
@@ -242,21 +153,22 @@ transformer.py
 ## 推荐参数配置
 ```
 vocab_size = 6400
-hidden_size = 384
+hidden_size = 256
 num_hidden_layers = 8
 num_attention_heads = 8
 num_key_value_heads = 4
 
-intermediate_size = 1024      # shared expert / dense fallback
-moe_intermediate_size = 512   # 每个 routed expert 的 FFN hidden
+intermediate_size = 128      # shared expert / dense fallback
+moe_intermediate_size = 48   # 每个 routed expert 的 FFN hidden
 
 num_routed_experts = 4
 num_shared_experts = 1
-num_experts_per_tok = 1      
+num_experts_per_tok = 1   
+
 n_hash_layers = 2             # 前 2 层 hash-routed
 hc_mult = 2                  
 
 max_position_embeddings = 4096
-rope_dim = 64
+rope_dim = 32
 tie_word_embeddings = True
 ```

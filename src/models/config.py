@@ -187,6 +187,31 @@ class ModelArgs:
         )
 
     @classmethod
+    def stage1(cls) -> "ModelArgs":
+        """返回阶段1预训练配置：5M 参数 Dense 模型。"""
+        return cls(
+            max_batch_size=32,
+            max_seq_len=1024,
+            vocab_size=6400,
+            dim=256,
+            inter_dim=688,  # 2/3 * 4 * dim for SwiGLU
+            n_layers=8,
+            n_dense_layers=8,  # 全部使用 Dense MLP
+            n_heads=8,
+            q_lora_rank=64,
+            kv_lora_rank=32,
+            head_dim=128,
+            qk_nope_head_dim=96,
+            qk_rope_head_dim=32,
+            v_head_dim=96,
+            original_seq_len=4096,
+            rope_theta=10000.0,
+            rope_factor=1.0,
+            compress_ratios=tuple([0] * 8),  # 不使用 HCA
+            hc_mult=1,  # 不使用 Hyper-Connections
+        )
+
+    @classmethod
     def original(cls) -> "ModelArgs":
         """返回原始 DeepSeek V4 配置：约 671B 总参数，约 37B 激活参数。"""
         return cls(
