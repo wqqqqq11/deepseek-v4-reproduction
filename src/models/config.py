@@ -188,15 +188,20 @@ class ModelArgs:
 
     @classmethod
     def stage1(cls) -> "ModelArgs":
-        """返回阶段1预训练配置：5M 参数 Dense 模型。"""
+        """返回阶段1预训练配置：5M 参数 Moe 模型。"""
         return cls(
             max_batch_size=32,
             max_seq_len=1024,
             vocab_size=6400,
             dim=256,
             inter_dim=688,  # 2/3 * 4 * dim for SwiGLU
+            moe_inter_dim=48,
             n_layers=8,
-            n_dense_layers=8,  # 全部使用 Dense MLP
+            n_dense_layers=0,  # 不使用 Dense MLP
+            n_hash_layers=1,  # 使用 Hash 路由
+            n_routed_experts=3,  # 路由专家数量
+            n_shared_experts=1,  # 共享专家数量
+            n_activated_experts=1,  # 每个 token 激活的专家数
             n_heads=8,
             q_lora_rank=64,
             kv_lora_rank=32,
@@ -209,6 +214,8 @@ class ModelArgs:
             rope_factor=1.0,
             compress_ratios=tuple([0] * 8),  # 不使用 HCA
             hc_mult=1,  # 不使用 Hyper-Connections
+            score_func="sqrtsoftplus",  # 路由打分函数
+            route_scale=1.0,  # 路由权重缩放
         )
 
     @classmethod

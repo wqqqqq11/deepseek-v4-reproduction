@@ -1,14 +1,10 @@
 """
-阶段1 Transformer 模型（Dense 版本）
+阶段1 Transformer 模型（MoE 版本）
 
-简化版 Transformer，专为阶段1预训练设计：
-    - 无 Hyper-Connections（hc_mult=1）
-    - 无 MoE，使用 Dense SwiGLU FFN
-    - 使用简化版 MLA（低秩 KV 压缩）
-    - 支持 MTP（Multi-Token Prediction）
+MoE架构：第0层使用Hash路由MoE，其余层使用Learned-gate MoE
 
 结构：
-    Embedding → [RMSNorm → MLA → RMSNorm → DenseMLP] × n_layers
+    Embedding → [RMSNorm → MLA → RMSNorm → MoE] × n_layers
             → RMSNorm → Head → Logits
 """
 
@@ -17,37 +13,40 @@ import torch.nn as nn
 from .config import ModelArgs
 from .layers import RMSNorm
 from .mla_attention_stage1 import MLAStage1
-from .dense_mlp import DenseMLP
+from .moe import MoE
 
 
 class BlockStage1(nn.Module):
     """
-    阶段1 Transformer Block。
+    阶段1 Transformer Block（MoE版本）。
 
     结构（Pre-Norm）：
         x_norm = RMSNorm(x)
         h = x + MLA(x_norm)
         h_norm = RMSNorm(h)
-        out = h + DenseMLP(h_norm)
+        out = h + MoE(h_norm, input_ids)
 
     Args:
+        layer_id: 层索引。
         args: 模型配置参数。
     """
 
-    def __init__(self, args: ModelArgs):
+    def __init__(self, layer_id: int, args: ModelArgs):
         super().__init__()
+        self.layer_id = layer_id
         self.attn_norm = RMSNorm(args.dim, args.norm_eps)
         self.attn = MLAStage1(args)
         self.mlp_norm = RMSNorm(args.dim, args.norm_eps)
-        self.mlp = DenseMLP(args.dim, args.inter_dim)
+        self.mlp = MoE(layer_id, args)
 
-    def forward(self, x: torch.Tensor, start_pos: int = 0) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, input_ids: torch.Tensor, start_pos: int = 0) -> torch.Tensor:
         """
         前向传播。
 
         Args:
             x: 输入张量 [batch, seq, dim]。
-            start_pos: 序列起始位置（用于 KV 缓存）。
+            input_ids: 输入token IDs [batch, seq]，用于hash路由。
+            start_pos: 序列起始位置（用于KV缓存）。
 
         Returns:
             torch.Tensor: 输出张量 [batch, seq, dim]。
@@ -55,31 +54,25 @@ class BlockStage1(nn.Module):
         # Attention 子层
         h = x + self.attn(self.attn_norm(x), start_pos)
 
-        # FFN 子层
-        out = h + self.mlp(self.mlp_norm(h))
+        # MoE 子层（需要input_ids用于hash路由）
+        out = h + self.mlp(self.mlp_norm(h), input_ids)
 
         return out
 
 
 class TransformerStage1(nn.Module):
     """
-    阶段1 Transformer 模型（Dense 版本）。
+    阶段1 Transformer 模型（MoE 版本）。
 
     结构：
         tokens → Embedding → [Block × n_layers] → RMSNorm → Head → logits
 
     特性：
-        - 纯 Dense 结构，无 MoE
+        - 全部使用MoE（第0层hash路由，其余learned-gate路由）
         - 支持 MTP（多令牌预测）
-        - 可选 FP8 量化
 
     Args:
         args: 模型配置参数。
-
-    Example:
-        >>> model = TransformerStage1(args)
-        >>> logits, mtp_logits = model(tokens)  # 训练模式
-        >>> logits = model(tokens)  # 推理模式
     """
 
     def __init__(self, args: ModelArgs):
@@ -91,18 +84,18 @@ class TransformerStage1(nn.Module):
         # 词嵌入
         self.embed = nn.Embedding(args.vocab_size, args.dim)
 
-        # Transformer 层
+        # Transformer 层（全部使用MoE）
         self.layers = nn.ModuleList([
-            BlockStage1(args) for _ in range(args.n_layers)
+            BlockStage1(i, args) for i in range(args.n_layers)
         ])
 
         # 最终归一化
         self.norm = RMSNorm(args.dim, args.norm_eps)
 
-        # 输出头（与嵌入共享或不共享）
+        # 输出头
         self.head = nn.Linear(args.dim, args.vocab_size, bias=False)
 
-        # 可选：MTP（Multi-Token Prediction）头
+        # 可选：MTP头
         self.mtp_enabled = getattr(args, "mtp_num_future_tokens", 0) > 0
         if self.mtp_enabled:
             self.mtp_head = nn.Linear(args.dim, args.vocab_size, bias=False)
@@ -110,12 +103,12 @@ class TransformerStage1(nn.Module):
         # 权重初始化
         self._init_weights()
 
-        # 可选：共享嵌入和输出头权重
+        # 权重共享
         if getattr(args, "tie_word_embeddings", True):
             self.head.weight = self.embed.weight
 
     def _init_weights(self):
-        """初始化模型权重"""
+        """初始化模型权重。"""
         for module in self.modules():
             if isinstance(module, nn.Linear):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
@@ -140,24 +133,23 @@ class TransformerStage1(nn.Module):
 
         Returns:
             torch.Tensor: 主 logits [batch_size, seq_len, vocab_size]。
-            如果 return_mtp=True，还返回 mtp_logits。
         """
         batch_size, seq_len = tokens.shape
 
         # 词嵌入
-        h = self.embed(tokens)  # [b, s, dim]
+        h = self.embed(tokens)
 
-        # 逐层传递
+        # 逐层传递（传递tokens用于hash路由）
         for layer in self.layers:
-            h = layer(h, start_pos)
+            h = layer(h, tokens, start_pos)
 
         # 最终归一化
-        h = self.norm(h)  # [b, s, dim]
+        h = self.norm(h)
 
         # 主输出头
-        logits = self.head(h)  # [b, s, vocab_size]
+        logits = self.head(h)
 
-        # MTP 输出（可选）
+        # MTP 输出
         if return_mtp and self.mtp_enabled:
             mtp_logits = self.mtp_head(h)
             return logits, mtp_logits
@@ -165,24 +157,8 @@ class TransformerStage1(nn.Module):
         return logits
 
     def get_num_params(self) -> int:
-        """获取模型总参数量"""
+        """获取模型总参数量。"""
         return sum(p.numel() for p in self.parameters())
-
-    def estimate_mfu(self, fwdbwd_per_iter: int, dt: float) -> float:
-        """
-        估算模型浮点利用率（MFU）。
-
-        Args:
-            fwdbwd_per_iter: 每次迭代的浮点运算数。
-            dt: 每次迭代的时间（秒）。
-
-        Returns:
-            float: MFU 百分比。
-        """
-        # 假设使用 A100（312 TFLOPS bf16）
-        flops_per_sec = fwdbwd_per_iter / dt
-        a100_flops = 312e12
-        return flops_per_sec / a100_flops
 
 
 # 别名

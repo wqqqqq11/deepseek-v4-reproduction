@@ -2,7 +2,7 @@
 推理入口
 
 用法:
-    python inference.py --checkpoint checkpoints/stage1/best.pt --config configs/stage1_pretrain.yaml
+    python inference.py --checkpoint checkpoints/stage1/best.pt --config configs/stage1_pretrain.yaml --temperature 0.6  --max_new_tokens 100
 """
 
 import argparse
@@ -79,16 +79,13 @@ def inference_stage1(config, checkpoint_path, input_file, output_dir, logger, ar
         start = time.time()
         output = generator.generate(
             prompt,
-            max_new_tokens=args.max_tokens,
-            strategy=args.strategy,
+            max_new_tokens=args.max_new_tokens,
             temperature=args.temperature,
-            top_k=args.top_k,
-            top_p=args.top_p,
         )
         elapsed = time.time() - start
 
-        # 统计生成token数（粗略估计：中文字符约1-2token，英文约1token）
-        gen_tokens = len(generator.encode(output)) - len(generator.encode(prompt))
+        # 统计生成token数
+        gen_tokens = len(generator.encode(output))
         total_tokens += gen_tokens
 
         results.append((prompt, output))
@@ -123,11 +120,8 @@ def main():
     parser.add_argument("--config", type=str, required=True, help="配置文件路径")
     parser.add_argument("--input_file", type=str, default="prompts/stage1/prompts.txt", help="输入文件路径")
     parser.add_argument("--output_dir", type=str, default="outputs/stage1/", help="输出目录")
-    parser.add_argument("--max_tokens", type=int, default=50, help="最大生成token数")
-    parser.add_argument("--strategy", type=str, default="greedy", choices=["greedy", "temperature", "top_k", "top_p"], help="采样策略")
-    parser.add_argument("--temperature", type=float, default=1.0, help="温度参数")
-    parser.add_argument("--top_k", type=int, default=None, help="Top-K参数")
-    parser.add_argument("--top_p", type=float, default=None, help="Top-P参数")
+    parser.add_argument("--max_new_tokens", type=int, default=100, help="最大生成token数")
+    parser.add_argument("--temperature", type=float, default=0.6, help="温度参数，默认0.6（参考官方代码）")
     args = parser.parse_args()
 
     # 设置日志

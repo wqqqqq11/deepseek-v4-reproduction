@@ -1,12 +1,11 @@
 """
 文本生成器模块
 
-提供流式生成功能，支持从检查点加载模型。
+提供 temperature 采样生成功能，支持从检查点加载模型。
 """
 
 import torch
-from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator
 
 try:
     from transformers import AutoTokenizer
@@ -16,14 +15,12 @@ except ImportError:
 
 from src.models.config import ModelArgs
 from src.models.transformer_stage1 import TransformerStage1
-from .sampler import sample_next_token
+from .sampler import sample
 
 
 class Generator:
     """
     文本生成器。
-
-    支持流式生成，可逐个token输出。
 
     Args:
         model: 模型实例。
@@ -56,7 +53,10 @@ class Generator:
 
         # 加载tokenizer
         tokenizer_name = config["data"].get("tokenizer_name", "jingyaogong/minimind-3")
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_name,
+            trust_remote_code=True
+        )
 
         # 模型配置
         model_args = ModelArgs.stage1()
@@ -84,72 +84,36 @@ class Generator:
         """将token IDs解码为文本。"""
         return self.tokenizer.decode(tokens, skip_special_tokens=True)
 
+    @torch.no_grad()
     def generate(
         self,
         prompt: str,
-        max_new_tokens: int = 50,
-        strategy: str = "greedy",
-        temperature: float = 1.0,
-        top_k: Optional[int] = None,
-        top_p: Optional[float] = None,
+        max_new_tokens: int = 100,
+        temperature: float = 0.6,
     ) -> str:
         """
-        生成文本（非流式）。
+        生成文本。
 
         Args:
             prompt: 输入提示文本。
             max_new_tokens: 最大生成token数。
-            strategy: 采样策略。
-            temperature: 温度参数。
-            top_k: Top-K参数。
-            top_p: Top-P参数。
+            temperature: 温度参数，默认0.6（参考官方代码）。
 
         Returns:
             str: 生成的完整文本。
         """
-        tokens = []
-        for token_id in self.generate_stream(
-            prompt, max_new_tokens, strategy, temperature, top_k, top_p
-        ):
-            tokens.append(token_id)
-
-        return self.decode(tokens)
-
-    def generate_stream(
-        self,
-        prompt: str,
-        max_new_tokens: int = 50,
-        strategy: str = "greedy",
-        temperature: float = 1.0,
-        top_k: Optional[int] = None,
-        top_p: Optional[float] = None,
-    ) -> Iterator[int]:
-        """
-        流式生成token。
-
-        Args:
-            prompt: 输入提示文本。
-            max_new_tokens: 最大生成token数。
-            strategy: 采样策略。
-            temperature: 温度参数。
-            top_k: Top-K参数。
-            top_p: Top-P参数。
-
-        Yields:
-            int: 生成的token ID。
-        """
         input_ids = self.encode(prompt)
         generated = list(input_ids)
 
-        with torch.no_grad():
-            for _ in range(max_new_tokens):
-                x = torch.tensor([generated], dtype=torch.long, device=self.device)
-                logits = self.model(x)
+        for _ in range(max_new_tokens):
+            x = torch.tensor([generated], dtype=torch.long, device=self.device)
+            logits = self.model(x)
 
-                next_logits = logits[0, -1, :]
-                next_token = sample_next_token(
-                    next_logits, strategy, temperature, top_k, top_p
-                )
+            next_logits = logits[0, -1, :]
+            next_token = sample(next_logits, temperature)
 
-                generated.append(next_token)
-                yield next_token
+            generated.append(next_token)
+
+        # 只返回新生成的部分
+        new_tokens = generated[len(input_ids):]
+        return self.decode(new_tokens)
